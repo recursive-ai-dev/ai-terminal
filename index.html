@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#030712" />
+    <meta name="description" content="x86_64 Neural Terminal — NanoTensor · Adam · TreeLogic · Cellular Automaton · wget engine" />
+    <title>x86_64 · Neural Terminal</title>
+
+    <!-- Favicon — inline SVG as data URI -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23030712' rx='6'/%3E%3Ctext x='4' y='24' font-family='monospace' font-size='20' font-weight='bold' fill='%234ade80'%3E%3E_%3C/text%3E%3Crect x='2' y='2' width='28' height='28' rx='5' fill='none' stroke='%234ade80' stroke-width='1' opacity='0.4'/%3E%3C/svg%3E" />
+
+    <!-- Preconnect for Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+
+    <!-- Critical CSS to prevent flash of unstyled content -->
+    <style>
+      html, body, #root {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #030712;
+        color: #bbf7d0;
+        font-family: 'Courier New', monospace;
+        overflow: hidden;
+      }
+      /* Boot loader */
+      #boot-loader {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background: #030712;
+        z-index: 99999;
+        transition: opacity 0.4s ease, visibility 0.4s ease;
+        gap: 16px;
+      }
+      #boot-loader.hidden {
+        opacity: 0;
+        visibility: hidden;
+      }
+      .boot-logo {
+        font-family: 'Courier New', monospace;
+        font-size: clamp(10px, 1.8vw, 14px);
+        color: #4ade80;
+        text-shadow: 0 0 8px #4ade8066, 0 0 16px #4ade8033;
+        white-space: pre;
+        line-height: 1.2;
+        text-align: center;
+      }
+      .boot-bar-outer {
+        width: 200px;
+        height: 2px;
+        background: #1f2937;
+        border-radius: 1px;
+        overflow: hidden;
+      }
+      .boot-bar-inner {
+        height: 100%;
+        background: #4ade80;
+        box-shadow: 0 0 6px #4ade80;
+        border-radius: 1px;
+        animation: boot-progress 0.8s ease-out forwards;
+      }
+      @keyframes boot-progress {
+        from { width: 0%; }
+        to   { width: 100%; }
+      }
+      .boot-label {
+        font-family: 'Courier New', monospace;
+        font-size: 11px;
+        color: #4ade8088;
+        letter-spacing: 0.15em;
+        animation: boot-blink 0.6s step-end 3;
+      }
+      @keyframes boot-blink {
+        50% { opacity: 0; }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Boot loader shown before React hydrates -->
+    <div id="boot-loader">
+      <div class="boot-logo">
+ ██╗  ██╗ █████╗  ██████╗
+ ╚██╗██╔╝██╔══██╗██╔════╝
+  ╚███╔╝ ╚█████╔╝███████╗
+  ██╔██╗ ██╔══██╗██╔═══╝
+ ██╔╝ ██╗╚█████╔╝╚██████╗
+ ╚═╝  ╚═╝ ╚════╝  ╚═════╝</div>
+      <div class="boot-bar-outer"><div class="boot-bar-inner"></div></div>
+      <div class="boot-label">INITIALIZING NEURAL RUNTIME...</div>
+    </div>
+
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+    <script>
+      // Hide boot loader once React has mounted
+      document.addEventListener('DOMContentLoaded', function() {
+        setTimeout(function() {
+          const loader = document.getElementById('boot-loader');
+          if (loader) {
+            loader.classList.add('hidden');
+            setTimeout(function() { loader.remove(); }, 500);
+          }
+        }, 900);
+      });
+    </script>
+  </body>
+</html>

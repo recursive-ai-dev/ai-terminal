@@ -1,0 +1,130 @@
+# ==============================================================
+# electron-builder configuration
+# Targets: AppImage (Linux), NSIS (Windows), DMG (macOS)
+# Run: npx electron-builder --linux appimage
+#      npx electron-builder --win nsis
+#      npx electron-builder --mac dmg
+# ==============================================================
+
+appId: "com.x86neural.terminal"
+productName: "x86 Neural Terminal"
+copyright: "Copyright © 2025 x86 Neural Terminal"
+
+# ── Directories ──
+directories:
+  buildResources: assets
+  output: release
+
+# ── Files to include in the app package ──
+files:
+  - dist/**/*          # Vite production build (renderer)
+  - electron-dist/**/* # Compiled main process + preload
+  - assets/**/*        # Icons, resources
+  - "!src/**/*"
+  - "!electron/**/*"   # Source only — compiled output used
+  - "!node_modules/**/*"
+  - "!*.ts"
+  - "!*.md"
+
+# ── Main entry point (compiled from electron/main.ts) ──
+main: "electron-dist/main.js"
+
+# ── Extra resources (copied outside ASAR) ──
+extraResources:
+  - from: assets
+    to: assets
+    filter:
+      - "**/*.png"
+      - "**/*.ico"
+      - "**/*.icns"
+
+# ══════════════════════════════════════════════════════════════
+# LINUX — AppImage (primary target)
+# ══════════════════════════════════════════════════════════════
+linux:
+  target:
+    - target: AppImage
+      arch:
+        - x64
+        - arm64
+  icon: assets/icon.png
+  category: "Utility"
+  description: "x86_64 Neural Terminal with NanoTensor, Adam optimizer, and Tree-Logic reasoning"
+  desktop:
+    Name: "x86 Neural Terminal"
+    Comment: "Neural network terminal with x86_64 architecture simulation"
+    Keywords: "terminal;neural;machine-learning;x86;tensor;"
+    StartupWMClass: "x86-neural-terminal"
+  artifactName: "x86-neural-terminal-${version}-${arch}.AppImage"
+
+# ── AppImage-specific ──
+appImage:
+  artifactName: "x86-neural-terminal-${version}-${arch}.AppImage"
+
+# ══════════════════════════════════════════════════════════════
+# WINDOWS — NSIS installer
+# ══════════════════════════════════════════════════════════════
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: assets/icon.ico
+  certificateSubjectName: ""        # Set for code signing
+  artifactName: "x86-neural-terminal-${version}-setup.exe"
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: "x86 Neural Terminal"
+  installerIcon: assets/icon.ico
+  uninstallerIcon: assets/icon.ico
+
+# ══════════════════════════════════════════════════════════════
+# MACOS — DMG
+# ══════════════════════════════════════════════════════════════
+mac:
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+  icon: assets/icon.icns
+  category: "public.app-category.developer-tools"
+  hardenedRuntime: true
+  entitlements: assets/entitlements.mac.plist
+  entitlementsInherit: assets/entitlements.mac.plist
+  artifactName: "x86-neural-terminal-${version}-${arch}.dmg"
+
+dmg:
+  window:
+    width: 540
+    height: 380
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+# ══════════════════════════════════════════════════════════════
+# AUTO-UPDATER — GitHub Releases
+# Replace owner/repo with your GitHub repository
+# ══════════════════════════════════════════════════════════════
+publish:
+  provider: github
+  owner: YOUR_GITHUB_USERNAME
+  repo: x86-neural-terminal
+  releaseType: release
+  publishAutoUpdate: true
+
+# ══════════════════════════════════════════════════════════════
+# ASAR options
+# ══════════════════════════════════════════════════════════════
+asar: true
+asarUnpack:
+  - node_modules/electron-store/**
+  - node_modules/electron-updater/**
