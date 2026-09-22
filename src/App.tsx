@@ -11,6 +11,7 @@ import SuggestionBar from "./components/SuggestionBar";
 import NativeTitleBar from "./components/NativeTitleBar";
 import CAEditor from "./components/CAEditor";
 import AchievementToast from "./components/AchievementToast";
+import RealTerminal from "./components/RealTerminal";
 import { usePlatform } from "./bridge/usePlatform";
 import { isElectron } from "./bridge/electronBridge";
 import type { Achievement } from "./engine/AchievementEngine";
@@ -315,6 +316,7 @@ export default function App() {
   const [inputFocused, setInputFocused]   = useState(false);
   const [currentToast, setCurrentToast]   = useState<Achievement | null>(null);
   const [toastQueue, setToastQueue]       = useState<Achievement[]>([]);
+  const [workspace, setWorkspace]         = useState<"shell" | "lab">("shell");
 
   const bottomRef    = useRef<HTMLDivElement>(null);
   const inputRef     = useRef<HTMLInputElement>(null);
@@ -547,6 +549,18 @@ export default function App() {
     if (e.key === "Escape") { setInput(""); setHistIdx(-1); }
   }, [input, histIdx, cmdHistory, settings, runCommand, platform]);
 
+  if (workspace === "shell") {
+    return (
+      <RealTerminal
+        platform={platform}
+        thm={thm}
+        fontStack={fontStack}
+        onOpenLab={() => setWorkspace("lab")}
+        onOpenSettings={() => { setWorkspace("lab"); setShowSettings(true); }}
+      />
+    );
+  }
+
   const btnPad = settings.largeClickTargets ? "px-3 py-1.5 text-sm" : "px-2 py-1 text-xs";
   const panelLeft = settings.panelPosition === "left";
 
@@ -619,7 +633,7 @@ export default function App() {
 
       {/* ── Native titlebar (Electron) ── */}
       <NativeTitleBar
-        title="x86_64 Neural Terminal — NanoTensor · Adam · TreeLogic · CA"
+        title="AI Terminal — Linux shell · AI copilot · Neural lab"
         thm={thm}
         window={platform.window}
         updaterStatus={platform.updaterStatus}
@@ -704,6 +718,18 @@ export default function App() {
               {/* Right side controls */}
               <div className="flex items-center gap-2">
                 {isProcessing && <ProcessingBadge />}
+
+                <button
+                  onClick={e => { e.stopPropagation(); setWorkspace("shell"); }}
+                  className={`quick-btn ${btnPad} rounded font-medium transition-all`}
+                  style={{
+                    background: `${thm.rawAccent}12`,
+                    border: `1px solid ${thm.rawAccent}55`,
+                    color: thm.rawAccent,
+                    borderRadius: settings.borderRadius,
+                  }}
+                  title="Return to AI shell"
+                >&gt;_ shell</button>
 
                 <button
                   onClick={e => { e.stopPropagation(); setShowKeyboard(p => !p); }}

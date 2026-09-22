@@ -50,6 +50,29 @@ const api = {
     openLog: ()                => ipcRenderer.invoke(IPC.FILE_OPEN_LOG),
   },
 
+  // ── Local AI provider ──
+  ai: {
+    ask: (request: string) => ipcRenderer.invoke(IPC.AI_ASK, request),
+  },
+
+  // ── Native shell session ──
+  terminal: {
+    start:  () => ipcRenderer.invoke(IPC.TERMINAL_START),
+    write:  (id: string, input: string) => ipcRenderer.invoke(IPC.TERMINAL_WRITE, id, input),
+    resize: (id: string, cols: number, rows: number) => ipcRenderer.invoke(IPC.TERMINAL_RESIZE, id, cols, rows),
+    kill:   (id: string) => ipcRenderer.invoke(IPC.TERMINAL_KILL, id),
+    onData: (cb: (event: { id: string; data: string; stderr?: boolean }) => void) => {
+      const handler = (_event: IpcRendererEvent, payload: { id: string; data: string; stderr?: boolean }) => cb(payload);
+      ipcRenderer.on(IPC.TERMINAL_DATA, handler);
+      return () => ipcRenderer.removeListener(IPC.TERMINAL_DATA, handler);
+    },
+    onExit: (cb: (event: { id: string; code: number | null; signal: string | null }) => void) => {
+      const handler = (_event: IpcRendererEvent, payload: { id: string; code: number | null; signal: string | null }) => cb(payload);
+      ipcRenderer.on(IPC.TERMINAL_EXIT, handler);
+      return () => ipcRenderer.removeListener(IPC.TERMINAL_EXIT, handler);
+    },
+  },
+
   // ── Updater ──
   updater: {
     check:    () => ipcRenderer.invoke(IPC.UPDATER_CHECK),

@@ -6,9 +6,9 @@
 #      npx electron-builder --mac dmg
 # ==============================================================
 
-appId: "com.x86neural.terminal"
-productName: "x86 Neural Terminal"
-copyright: "Copyright © 2025 x86 Neural Terminal"
+appId: "com.aiterminal.desktop"
+productName: "AI Terminal"
+copyright: "Copyright © 2026 AI Terminal"
 
 # ── Directories ──
 directories:
@@ -22,12 +22,8 @@ files:
   - assets/**/*        # Icons, resources
   - "!src/**/*"
   - "!electron/**/*"   # Source only — compiled output used
-  - "!node_modules/**/*"
   - "!*.ts"
   - "!*.md"
-
-# ── Main entry point (compiled from electron/main.ts) ──
-main: "electron-dist/main.js"
 
 # ── Extra resources (copied outside ASAR) ──
 extraResources:
@@ -49,17 +45,18 @@ linux:
         - arm64
   icon: assets/icon.png
   category: "Utility"
-  description: "x86_64 Neural Terminal with NanoTensor, Adam optimizer, and Tree-Logic reasoning"
+  description: "Linux-native AI terminal with an approval-first copilot and neural computing lab"
   desktop:
-    Name: "x86 Neural Terminal"
-    Comment: "Neural network terminal with x86_64 architecture simulation"
-    Keywords: "terminal;neural;machine-learning;x86;tensor;"
-    StartupWMClass: "x86-neural-terminal"
-  artifactName: "x86-neural-terminal-${version}-${arch}.AppImage"
+    entry:
+      Name: "AI Terminal"
+      Comment: "Linux-native terminal with an approval-first AI copilot"
+      Keywords: "terminal;ai;linux;shell;neural;"
+      StartupWMClass: "ai-terminal"
+  artifactName: "ai-terminal-${version}-${arch}.AppImage"
 
 # ── AppImage-specific ──
 appImage:
-  artifactName: "x86-neural-terminal-${version}-${arch}.AppImage"
+  artifactName: "ai-terminal-${version}-${arch}.AppImage"
 
 # ══════════════════════════════════════════════════════════════
 # WINDOWS — NSIS installer
@@ -70,15 +67,14 @@ win:
       arch:
         - x64
   icon: assets/icon.ico
-  certificateSubjectName: ""        # Set for code signing
-  artifactName: "x86-neural-terminal-${version}-setup.exe"
+  artifactName: "ai-terminal-${version}-setup.exe"
 
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: "x86 Neural Terminal"
+  shortcutName: "AI Terminal"
   installerIcon: assets/icon.ico
   uninstallerIcon: assets/icon.ico
 
@@ -96,7 +92,7 @@ mac:
   hardenedRuntime: true
   entitlements: assets/entitlements.mac.plist
   entitlementsInherit: assets/entitlements.mac.plist
-  artifactName: "x86-neural-terminal-${version}-${arch}.dmg"
+  artifactName: "ai-terminal-${version}-${arch}.dmg"
 
 dmg:
   window:
@@ -116,8 +112,8 @@ dmg:
 # ══════════════════════════════════════════════════════════════
 publish:
   provider: github
-  owner: YOUR_GITHUB_USERNAME
-  repo: x86-neural-terminal
+  owner: recursive-ai-dev
+  repo: ai-terminal
   releaseType: release
   publishAutoUpdate: true
 
@@ -128,3 +124,4 @@ asar: true
 asarUnpack:
   - node_modules/electron-store/**
   - node_modules/electron-updater/**
+  - node_modules/node-pty/**

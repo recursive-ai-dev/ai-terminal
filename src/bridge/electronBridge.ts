@@ -57,6 +57,40 @@ export interface ElectronUpdaterAPI {
   onStatus: (cb: (status: UpdaterStatus) => void) => () => void;
 }
 
+export interface TerminalDataEvent {
+  id: string;
+  data: string;
+  stderr?: boolean;
+}
+
+export interface TerminalExitEvent {
+  id: string;
+  code: number | null;
+  signal: string | null;
+}
+
+export interface ElectronTerminalAPI {
+  start:  () => Promise<{ ok: boolean; id?: string; cwd?: string; shell?: string; pty?: boolean; error?: string }>;
+  write:  (id: string, input: string) => Promise<{ ok: boolean; error?: string }>;
+  resize: (id: string, cols: number, rows: number) => Promise<{ ok: boolean; error?: string }>;
+  kill:   (id: string) => Promise<{ ok: boolean; error?: string }>;
+  onData: (cb: (event: TerminalDataEvent) => void) => () => void;
+  onExit: (cb: (event: TerminalExitEvent) => void) => () => void;
+}
+
+export interface ElectronAIAPI {
+  ask: (request: string) => Promise<{
+    ok: boolean;
+    source?: "ollama";
+    title?: string;
+    explanation?: string;
+    command?: string;
+    risk?: "safe" | "review" | "dangerous";
+    notes?: string[];
+    error?: string;
+  }>;
+}
+
 export interface ElectronAPI {
   settings:  ElectronSettingsAPI;
   window:    ElectronWindowAPI;
@@ -64,6 +98,8 @@ export interface ElectronAPI {
   clipboard: ElectronClipboardAPI;
   app:       ElectronAppAPI;
   file:      ElectronFileAPI;
+  ai:        ElectronAIAPI;
+  terminal:  ElectronTerminalAPI;
   updater:   ElectronUpdaterAPI;
 }
 
