@@ -10,10 +10,6 @@
     <!-- Favicon — inline SVG as data URI -->
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23030712' rx='6'/%3E%3Ctext x='4' y='24' font-family='monospace' font-size='20' font-weight='bold' fill='%234ade80'%3E%3E_%3C/text%3E%3Crect x='2' y='2' width='28' height='28' rx='5' fill='none' stroke='%234ade80' stroke-width='1' opacity='0.4'/%3E%3C/svg%3E" />
 
-    <!-- Preconnect for Google Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-
     <!-- Critical CSS to prevent flash of unstyled content -->
     <style>
       html, body, #root {
@@ -44,7 +40,8 @@
       }
       .boot-logo {
         font-family: 'Courier New', monospace;
-        font-size: clamp(10px, 1.8vw, 14px);
+        font-size: 32px;
+        font-weight: bold;
         color: #4ade80;
         text-shadow: 0 0 8px #4ade8066, 0 0 16px #4ade8033;
         white-space: pre;
@@ -84,30 +81,14 @@
   <body>
     <!-- Boot loader shown before React hydrates -->
     <div id="boot-loader">
-      <div class="boot-logo">
- ██╗  ██╗ █████╗  ██████╗
- ╚██╗██╔╝██╔══██╗██╔════╝
-  ╚███╔╝ ╚█████╔╝███████╗
-  ██╔██╗ ██╔══██╗██╔═══╝
- ██╔╝ ██╗╚█████╔╝╚██████╗
- ╚═╝  ╚═╝ ╚════╝  ╚═════╝</div>
+      <div class="boot-logo">&gt;_</div>
       <div class="boot-bar-outer"><div class="boot-bar-inner"></div></div>
       <div class="boot-label">STARTING AI TERMINAL...</div>
     </div>
 
     <div id="root"></div>
+    <!-- The boot loader is removed by src/main.tsx once React has mounted
+         (no inline script: the desktop build's CSP forbids it). -->
     <script type="module" src="/src/main.tsx"></script>
-    <script>
-      // Hide boot loader once React has mounted
-      document.addEventListener('DOMContentLoaded', function() {
-        setTimeout(function() {
-          const loader = document.getElementById('boot-loader');
-          if (loader) {
-            loader.classList.add('hidden');
-            setTimeout(function() { loader.remove(); }, 500);
-          }
-        }, 900);
-      });
-    </script>
   </body>
 </html>

@@ -15,6 +15,10 @@ export const IPC = {
   WINDOW_MAXIMIZE: "window:maximize",
   WINDOW_CLOSE:    "window:close",
   WINDOW_IS_MAX:   "window:isMaximized",
+  WINDOW_MAX_PUSH: "window:maximized:push",    // main → renderer
+
+  // ── Native menu → renderer ──
+  MENU_ACTION:     "menu:action",
 
   // ── Shell / system ──
   SHELL_OPEN_URL:     "shell:openUrl",
@@ -34,20 +38,26 @@ export const IPC = {
   UPDATER_STATUS:         "updater:status",         // renderer → main (query)
   UPDATER_STATUS_PUSH:    "updater:status:push",    // main → renderer (push)
 
-  // ── Native file I/O (optional future use) ──
+  // ── Native file I/O ──
   FILE_SAVE_LOG:   "file:saveLog",
-  FILE_OPEN_LOG:  "file:openLog",
+  FILE_OPEN_LOG:   "file:openLog",
 
   // ── Local AI provider ──
   AI_ASK:          "ai:ask",
 
   // ── Native terminal session ──
-  TERMINAL_START:  "terminal:start",
-  TERMINAL_WRITE:  "terminal:write",
-  TERMINAL_RESIZE: "terminal:resize",
-  TERMINAL_KILL:   "terminal:kill",
-  TERMINAL_DATA:   "terminal:data",
-  TERMINAL_EXIT:   "terminal:exit",
+  TERMINAL_START:     "terminal:start",
+  TERMINAL_WRITE:     "terminal:write",
+  TERMINAL_RESIZE:    "terminal:resize",
+  TERMINAL_INTERRUPT: "terminal:interrupt",
+  TERMINAL_ACK:       "terminal:ack",
+  TERMINAL_KILL:      "terminal:kill",
+  TERMINAL_DATA:      "terminal:data",
+  TERMINAL_EXIT:      "terminal:exit",
 } as const;
 
 export type IPCChannel = typeof IPC[keyof typeof IPC];
+
+/** Actions the native menu forwards to the renderer. */
+export const MENU_ACTIONS = ["saveLog", "openLog", "openSettings"] as const;
+export type MenuAction = typeof MENU_ACTIONS[number];

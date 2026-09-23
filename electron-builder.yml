@@ -1,38 +1,40 @@
 # ==============================================================
 # electron-builder configuration
-# Targets: AppImage (Linux), NSIS (Windows), DMG (macOS)
-# Run: npx electron-builder --linux appimage
-#      npx electron-builder --win nsis
-#      npx electron-builder --mac dmg
+# Primary target: Linux AppImage. Windows (NSIS) and macOS (DMG)
+# remain configured for cross-platform packaging.
+#
+#   npm run dist:linux          # AppImage for the host architecture
+#   npm run dist:linux -- --arm64
+#   npm run dist:win / dist:mac
+#
+# Only runtime dependencies from package.json "dependencies" /
+# "optionalDependencies" are packed; the renderer is pre-bundled by
+# Vite into dist/, and the main process by esbuild into electron-dist/.
 # ==============================================================
 
 appId: "com.aiterminal.desktop"
 productName: "AI Terminal"
 copyright: "Copyright © 2026 AI Terminal"
 
-# ── Directories ──
 directories:
   buildResources: assets
   output: release
 
-# ── Files to include in the app package ──
 files:
-  - dist/**/*          # Vite production build (renderer)
-  - electron-dist/**/* # Compiled main process + preload
-  - assets/**/*        # Icons, resources
-  - "!src/**/*"
-  - "!electron/**/*"   # Source only — compiled output used
-  - "!*.ts"
-  - "!*.md"
+  - package.json
+  - dist/**/*
+  - electron-dist/**/*
+  - assets/icon.png
+  - assets/tray-icon.png
 
-# ── Extra resources (copied outside ASAR) ──
-extraResources:
-  - from: assets
-    to: assets
-    filter:
-      - "**/*.png"
-      - "**/*.ico"
-      - "**/*.icns"
+# node-pty ships a native addon and a spawn helper that must be real
+# files on disk (not inside app.asar) to be loaded and executed.
+asar: true
+asarUnpack:
+  - "node_modules/node-pty/**"
+
+# Rebuild native dependencies (node-pty) against Electron's ABI.
+npmRebuild: true
 
 # ══════════════════════════════════════════════════════════════
 # LINUX — AppImage (primary target)
@@ -40,23 +42,20 @@ extraResources:
 linux:
   target:
     - target: AppImage
-      arch:
-        - x64
-        - arm64
+  executableName: ai-terminal
+  # .desktop file name and StartupWMClass follow package.json "desktopName",
+  # which Electron also uses as the window's app_id / WM_CLASS.
+  syncDesktopName: true
   icon: assets/icon.png
-  category: "Utility"
+  category: "System;TerminalEmulator"
+  synopsis: "Linux terminal with an approval-first AI copilot"
   description: "Linux-native AI terminal with an approval-first copilot and neural computing lab"
   desktop:
     entry:
       Name: "AI Terminal"
       Comment: "Linux-native terminal with an approval-first AI copilot"
-      Keywords: "terminal;ai;linux;shell;neural;"
-      StartupWMClass: "ai-terminal"
-  artifactName: "ai-terminal-${version}-${arch}.AppImage"
-
-# ── AppImage-specific ──
-appImage:
-  artifactName: "ai-terminal-${version}-${arch}.AppImage"
+      Keywords: "terminal;shell;console;command;ai;"
+  artifactName: "ai-terminal-${version}-${arch}.${ext}"
 
 # ══════════════════════════════════════════════════════════════
 # WINDOWS — NSIS installer
@@ -67,7 +66,7 @@ win:
       arch:
         - x64
   icon: assets/icon.ico
-  artifactName: "ai-terminal-${version}-setup.exe"
+  artifactName: "ai-terminal-${version}-setup.${ext}"
 
 nsis:
   oneClick: false
@@ -79,7 +78,7 @@ nsis:
   uninstallerIcon: assets/icon.ico
 
 # ══════════════════════════════════════════════════════════════
-# MACOS — DMG
+# MACOS — DMG (electron-builder converts the 512px PNG to .icns)
 # ══════════════════════════════════════════════════════════════
 mac:
   target:
@@ -87,12 +86,12 @@ mac:
       arch:
         - x64
         - arm64
-  icon: assets/icon.icns
+  icon: assets/icon.png
   category: "public.app-category.developer-tools"
   hardenedRuntime: true
   entitlements: assets/entitlements.mac.plist
   entitlementsInherit: assets/entitlements.mac.plist
-  artifactName: "ai-terminal-${version}-${arch}.dmg"
+  artifactName: "ai-terminal-${version}-${arch}.${ext}"
 
 dmg:
   window:
@@ -108,20 +107,9 @@ dmg:
 
 # ══════════════════════════════════════════════════════════════
 # AUTO-UPDATER — GitHub Releases
-# Replace owner/repo with your GitHub repository
 # ══════════════════════════════════════════════════════════════
 publish:
   provider: github
   owner: recursive-ai-dev
   repo: ai-terminal
   releaseType: release
-  publishAutoUpdate: true
-
-# ══════════════════════════════════════════════════════════════
-# ASAR options
-# ══════════════════════════════════════════════════════════════
-asar: true
-asarUnpack:
-  - node_modules/electron-store/**
-  - node_modules/electron-updater/**
-  - node_modules/node-pty/**

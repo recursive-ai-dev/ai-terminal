@@ -1,68 +1,50 @@
 // ============================================================
-// NATIVE SETTINGS STORE — electron-store backed
-// Persists to ~/.config/<appName>/config.json (Linux/macOS)
-//              %APPDATA%\<appName>\config.json (Windows)
-// Falls back gracefully if electron-store is unavailable.
+// NATIVE SETTINGS STORE
+// Persists to <userData>/settings.json:
+//   Linux:   ~/.config/AI Terminal/settings.json
+//   macOS:   ~/Library/Application Support/AI Terminal/settings.json
+//   Windows: %APPDATA%\AI Terminal\settings.json
+// Imports the pre-1.0 electron-store file once, if present.
 // ============================================================
-import { ipcMain, IpcMainInvokeEvent } from "electron";
+import { app } from "electron";
+import * as path from "node:path";
 import { IPC } from "./channels";
+import { handle } from "../lib/ipcGuard";
+import { JsonStore } from "../lib/jsonStore";
+import { createLogger } from "../lib/logger";
 
-// Lazy-load electron-store to avoid hard crash if not installed
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let store: any = null;
+const log = createLogger("settings");
+const SETTINGS_KEY = "uxSettings";
+const MAX_SETTINGS_BYTES = 256 * 1024;
 
-async function getStore() {
-  if (store) return store;
-  try {
-    // electron-store v8+ is ESM — dynamic import required
-    const { default: Store } = await import("electron-store");
-    store = new Store({
-      name: "x86-neural-terminal-ux",
-      defaults: {},
-      // Validate schema loosely — we merge with defaults in renderer anyway
-    });
-  } catch {
-    // Fallback in-memory store if electron-store not available
-    const mem: Record<string, unknown> = {};
-    store = {
-      get: (k: string, def?: unknown) => (k in mem ? mem[k] : def),
-      set: (k: string, v: unknown) => { mem[k] = v; },
-      clear: () => { Object.keys(mem).forEach(k => delete mem[k]); },
-    };
-  }
-  return store;
-}
+export function registerSettingsHandlers(): void {
+  const userData = app.getPath("userData");
+  const store = new JsonStore({
+    file: path.join(userData, "settings.json"),
+    legacyFile: path.join(userData, "x86-neural-terminal-ux.json"),
+    onRecover: (reason, backup) => log.warn(`settings file recovered (${reason})`, backup ? { backup } : undefined),
+  });
+  log.info("settings store", store.path);
 
-// ── Register all settings IPC handlers ──
-export async function registerSettingsHandlers(): Promise<void> {
-  const s = await getStore();
-
-  // Get all settings (returns full object or empty)
-  ipcMain.handle(IPC.SETTINGS_GET, (_event: IpcMainInvokeEvent) => {
-    try {
-      return s.get("uxSettings", null);
-    } catch {
-      return null;
-    }
+  handle(IPC.SETTINGS_GET, () => {
+    const value = store.get(SETTINGS_KEY);
+    return value && typeof value === "object" && !Array.isArray(value) ? value : null;
   });
 
-  // Set all settings (renderer sends full UXSettings object)
-  ipcMain.handle(IPC.SETTINGS_SET, (_event: IpcMainInvokeEvent, settings: unknown) => {
-    try {
-      s.set("uxSettings", settings);
-      return { ok: true };
-    } catch (err) {
-      return { ok: false, error: String(err) };
+  handle(IPC.SETTINGS_SET, (_event, settings: unknown) => {
+    if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
+      return { ok: false, error: "Settings must be an object" };
     }
+    const size = Buffer.byteLength(JSON.stringify(settings), "utf8");
+    if (size > MAX_SETTINGS_BYTES) {
+      return { ok: false, error: `Settings exceed ${MAX_SETTINGS_BYTES} bytes` };
+    }
+    store.set(SETTINGS_KEY, settings);
+    return { ok: true };
   });
 
-  // Reset — clears the native store
-  ipcMain.handle(IPC.SETTINGS_RESET, (_event: IpcMainInvokeEvent) => {
-    try {
-      s.clear();
-      return { ok: true };
-    } catch (err) {
-      return { ok: false, error: String(err) };
-    }
+  handle(IPC.SETTINGS_RESET, () => {
+    store.clear();
+    return { ok: true };
   });
 }

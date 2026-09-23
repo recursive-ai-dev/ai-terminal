@@ -1,41 +1,21 @@
 {
-  // ── TypeScript config for Electron main process compilation ──
-  // Target: Node.js CommonJS (Electron's main process runtime)
-  // Input:  electron/
-  // Output: electron-dist/
-  "extends": "./tsconfig.json",
+  // Type-checks the Electron main process and preload.
+  // Emission is done by scripts/build-electron.mjs (esbuild bundle).
   "compilerOptions": {
-    "target":           "ES2020",
-    "module":           "CommonJS",
-    "moduleResolution": "node",
-    "allowImportingTsExtensions": false,
-    "outDir":          "./electron-dist",
-    "rootDir":          "./electron",
-    "lib":              ["ES2020"],
-    "types":            ["node"],
-
-    // ── Strict mode ──
-    "strict":           true,
-    "noImplicitAny":    true,
-    "strictNullChecks": true,
-
-    // ── Emit ──
-    "declaration":      true,
-    "declarationMap":   false,
-    "sourceMap":        true,
-    "esModuleInterop":  true,
-    "resolveJsonModule":true,
-    "noEmit":          false,
-
-    // ── Electron has no DOM in main process ──
-    "skipLibCheck":     true
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true
   },
-  "include": [
-    "electron/**/*.ts"
-  ],
-  "exclude": [
-    "node_modules",
-    "dist",
-    "src"
-  ]
+  "include": ["electron/**/*.ts", "src/shared/**/*.ts"]
 }

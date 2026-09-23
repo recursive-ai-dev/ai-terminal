@@ -17,6 +17,13 @@ export interface ElectronWindowAPI {
   maximize:    () => Promise<void>;
   close:       () => Promise<void>;
   isMaximized: () => Promise<boolean>;
+  onMaximizedChange: (cb: (maximized: boolean) => void) => () => void;
+}
+
+export type MenuAction = "saveLog" | "openLog" | "openSettings";
+
+export interface ElectronMenuAPI {
+  onAction: (cb: (action: MenuAction) => void) => () => void;
 }
 
 export interface ElectronShellAPI {
@@ -42,6 +49,7 @@ export interface ElectronFileAPI {
 
 export type UpdaterStatus =
   | { state: "idle" }
+  | { state: "disabled"; reason: string }
   | { state: "checking" }
   | { state: "available";     version: string; releaseDate: string }
   | { state: "not-available"; version: string }
@@ -60,7 +68,6 @@ export interface ElectronUpdaterAPI {
 export interface TerminalDataEvent {
   id: string;
   data: string;
-  stderr?: boolean;
 }
 
 export interface TerminalExitEvent {
@@ -69,31 +76,49 @@ export interface TerminalExitEvent {
   signal: string | null;
 }
 
+export interface TerminalStartResult {
+  ok: boolean;
+  id?: string;
+  cwd?: string;
+  shell?: string;
+  pty?: boolean;
+  /** Why the pipe fallback is in use (only when pty is false). */
+  ptyUnavailableReason?: string;
+  error?: string;
+}
+
+export type TerminalResult = { ok: boolean; error?: string };
+
 export interface ElectronTerminalAPI {
-  start:  () => Promise<{ ok: boolean; id?: string; cwd?: string; shell?: string; pty?: boolean; error?: string }>;
-  write:  (id: string, input: string) => Promise<{ ok: boolean; error?: string }>;
-  resize: (id: string, cols: number, rows: number) => Promise<{ ok: boolean; error?: string }>;
-  kill:   (id: string) => Promise<{ ok: boolean; error?: string }>;
+  start:     () => Promise<TerminalStartResult>;
+  write:     (id: string, input: string) => Promise<TerminalResult>;
+  resize:    (id: string, cols: number, rows: number) => Promise<TerminalResult>;
+  interrupt: (id: string) => Promise<TerminalResult>;
+  ack:       (id: string, chars: number) => Promise<TerminalResult>;
+  kill:      (id: string) => Promise<TerminalResult>;
   onData: (cb: (event: TerminalDataEvent) => void) => () => void;
   onExit: (cb: (event: TerminalExitEvent) => void) => () => void;
 }
 
+export interface AIAskResult {
+  ok: boolean;
+  source?: "ollama";
+  title?: string;
+  explanation?: string;
+  command?: string;
+  risk?: "safe" | "review" | "dangerous";
+  notes?: string[];
+  error?: string;
+}
+
 export interface ElectronAIAPI {
-  ask: (request: string) => Promise<{
-    ok: boolean;
-    source?: "ollama";
-    title?: string;
-    explanation?: string;
-    command?: string;
-    risk?: "safe" | "review" | "dangerous";
-    notes?: string[];
-    error?: string;
-  }>;
+  ask: (request: string) => Promise<AIAskResult>;
 }
 
 export interface ElectronAPI {
   settings:  ElectronSettingsAPI;
   window:    ElectronWindowAPI;
+  menu:      ElectronMenuAPI;
   shell:     ElectronShellAPI;
   clipboard: ElectronClipboardAPI;
   app:       ElectronAppAPI;

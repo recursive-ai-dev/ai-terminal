@@ -21,7 +21,9 @@ export class SeededRNG {
     this.state = (this.state + 0x6d2b79f5) | 0;
     let z = Math.imul(this.state ^ (this.state >>> 15), 1 | this.state);
     z = (z ^ (z + Math.imul(z ^ (z >>> 7), 61 | z))) >>> 0;
-    return (z ^ (z >>> 14)) / 0x100000000;
+    // `^` yields a signed 32-bit int; `>>> 0` makes it unsigned so the
+    // result is in [0, 1) rather than [-0.5, 0.5).
+    return ((z ^ (z >>> 14)) >>> 0) / 0x100000000;
   }
 
   // Box-Muller: N(0,1)

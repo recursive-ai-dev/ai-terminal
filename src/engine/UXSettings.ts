@@ -204,11 +204,13 @@ function clampFloat(v: unknown, min: number, max: number, dp: number): number | 
   return Math.round(clamped * factor) / factor;
 }
 
-function sanitizeString(v: unknown, maxLen: number, pattern?: RegExp): string | null {
+function sanitizeString(v: unknown, maxLen: number, pattern?: RegExp, options: { trim?: boolean; allowEmpty?: boolean } = {}): string | null {
   if (typeof v !== "string") return null;
-  const trimmed = v.trim().slice(0, maxLen);
-  if (pattern && !pattern.test(trimmed)) return null;
-  return trimmed;
+  const { trim = true, allowEmpty = true } = options;
+  const value = (trim ? v.trim() : v).slice(0, maxLen);
+  if (!allowEmpty && value.trim() === "") return null;
+  if (pattern && !pattern.test(value)) return null;
+  return value;
 }
 
 export function validateSettings(
@@ -255,10 +257,11 @@ export function validateSettings(
   field("sidebarWidth",      v => clampInt(v, 240, 480), base.sidebarWidth);
   field("autocompleteMaxItems", v => clampInt(v, 3, 20), base.autocompleteMaxItems);
 
-  field("promptCustom",      v => sanitizeString(v, 20) ?? (warnings.push("promptCustom reset"), ">>"), base.promptCustom);
+  field("promptCustom",      v => sanitizeString(v, 20, undefined, { allowEmpty: false }) ?? (warnings.push("promptCustom reset"), ">>"), base.promptCustom);
   field("promptUser",        v => sanitizeString(v, 16, /^[\w.\-]+$/) ?? null, base.promptUser);
   field("promptHost",        v => sanitizeString(v, 16, /^[\w.\-]+$/) ?? null, base.promptHost);
-  field("promptSuffix",      v => sanitizeString(v, 4) ?? " ", base.promptSuffix);
+  // Not trimmed: the suffix is usually whitespace (" " or " > ").
+  field("promptSuffix",      v => sanitizeString(v, 4, undefined, { trim: false }) ?? " ", base.promptSuffix);
   field("inputPlaceholder",  v => sanitizeString(v, 80) ?? base.inputPlaceholder, base.inputPlaceholder);
   field("customCSS",         v => sanitizeString(v, 2000) ?? "", base.customCSS);
 
@@ -303,17 +306,30 @@ export function diffSettings(prev: UXSettings, next: UXSettings): SettingsDiff {
 }
 
 const STORAGE_KEY = "x86_neural_ux_settings_v3";
+// Earlier releases stored settings here; read once and migrate forward.
+const LEGACY_STORAGE_KEYS = ["x86_neural_ux_settings"];
+
+function readStoredSettings(): { raw: string; legacy: boolean } | null {
+  const current = localStorage.getItem(STORAGE_KEY);
+  if (current) return { raw: current, legacy: false };
+  for (const key of LEGACY_STORAGE_KEYS) {
+    const legacy = localStorage.getItem(key);
+    if (legacy) return { raw: legacy, legacy: true };
+  }
+  return null;
+}
 
 export function loadSettingsVersioned(): { settings: UXSettings; migrated: boolean; version: number } {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { settings: { ...DEFAULT_SETTINGS }, migrated: false, version: 0 };
-    const parsed = JSON.parse(raw) as Partial<PersistedSettingsBlob & UXSettings>;
+    const stored = readStoredSettings();
+    if (!stored) return { settings: { ...DEFAULT_SETTINGS }, migrated: false, version: 0 };
+    const parsed = JSON.parse(stored.raw) as Partial<PersistedSettingsBlob & UXSettings>;
+    if (!parsed || typeof parsed !== "object") return { settings: { ...DEFAULT_SETTINGS }, migrated: false, version: 0 };
     if ("__version" in parsed && typeof parsed.__version === "number") {
       const version = parsed.__version;
       const rawSettings = (parsed as PersistedSettingsBlob).settings ?? parsed;
       const report = validateSettings(rawSettings as Partial<UXSettings>);
-      return { settings: { ...DEFAULT_SETTINGS, ...report.validated }, migrated: version < SETTINGS_SCHEMA_VERSION, version };
+      return { settings: { ...DEFAULT_SETTINGS, ...report.validated }, migrated: stored.legacy || version < SETTINGS_SCHEMA_VERSION, version };
     }
     const report = validateSettings(parsed as Partial<UXSettings>);
     return { settings: { ...DEFAULT_SETTINGS, ...report.validated }, migrated: true, version: 0 };
@@ -334,7 +350,10 @@ export function saveSettings(s: UXSettings): void {
 }
 
 export function resetSettings(): UXSettings {
-  try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+    for (const key of LEGACY_STORAGE_KEYS) localStorage.removeItem(key);
+  } catch { /* ignore */ }
   return { ...DEFAULT_SETTINGS };
 }
 

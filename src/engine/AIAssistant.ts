@@ -7,7 +7,9 @@
 // build safe by default, even before a remote model is configured.
 // ============================================================
 
-export type PlanRisk = "safe" | "review" | "dangerous";
+import { assessCommand, maxRisk, validateCommandText, type CommandRisk } from "../shared/commandRisk";
+
+export type PlanRisk = CommandRisk;
 
 export interface AIPlan {
   request: string;
@@ -22,6 +24,13 @@ function quote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
+/** Quote a path but keep a leading ~ expandable by the shell. */
+function quotePath(value: string): string {
+  if (value === "~") return "~";
+  if (value.startsWith("~/")) return value.length > 2 ? `~/${quote(value.slice(2))}` : "~/";
+  return quote(value);
+}
+
 function cleanRequest(request: string): string {
   return request.trim().replace(/^\/?(ai|ask)\s+/i, "").replace(/[\u0000-\u001f]/g, "");
 }
@@ -34,9 +43,30 @@ function pathFromRequest(request: string): string | null {
 /**
  * Produce a deterministic shell plan for common operator tasks.
  * This is intentionally conservative: unknown requests are not
- * converted into executable shell code.
+ * converted into executable shell code. The shared classifier can only
+ * raise a plan's risk, never lower it.
  */
 export function planCommand(rawRequest: string): AIPlan {
+  return reviewPlan(templatePlan(rawRequest));
+}
+
+/**
+ * Re-check any plan (local or model-generated) against the shared
+ * classifier and command validation before it is shown to the user.
+ */
+export function reviewPlan(plan: AIPlan): AIPlan {
+  if (!plan.command) return plan;
+  const validated = validateCommandText(plan.command);
+  if (!validated.ok) {
+    return { ...plan, command: "", risk: maxRisk(plan.risk, "review"), notes: [`Command rejected: ${validated.error}.`, ...plan.notes].slice(0, 5) };
+  }
+  const assessment = assessCommand(validated.command);
+  const notes = [...plan.notes];
+  for (const reason of assessment.reasons) if (!notes.includes(reason)) notes.push(reason);
+  return { ...plan, command: validated.command, risk: maxRisk(plan.risk, assessment.risk), notes: notes.slice(0, 5) };
+}
+
+function templatePlan(rawRequest: string): AIPlan {
   const request = cleanRequest(rawRequest);
   const q = request.toLowerCase();
   const base = { request, notes: ["Review the command before executing it."] };
@@ -92,12 +122,12 @@ export function planCommand(rawRequest: string): AIPlan {
     const quoted = request.match(/(?:for|text|word|containing)\s+["']?([^"']+?)["']?(?:\s+(?:in|under)\s+.*)?$/i)?.[1]?.trim();
     const term = quoted || "TODO";
     const location = pathFromRequest(request) || ".";
-    return { ...base, title: `Search for ${term}`, explanation: "Recursively search text files and include line numbers while skipping binary matches.", command: `grep -RInI --exclude-dir=.git ${quote(term)} ${quote(location)}`, risk: "review", notes: ["Search scope: ${location}".replace("${location}", location)] };
+    return { ...base, title: `Search for ${term}`, explanation: "Recursively search text files and include line numbers while skipping binary matches.", command: `grep -RInI --exclude-dir=.git ${quote(term)} ${quotePath(location)}`, risk: "review", notes: [`Search scope: ${location}`] };
   }
 
   if (/read|show|print|inspect.*file/.test(q)) {
     const file = pathFromRequest(request) || "README.md";
-    return { ...base, title: `Read ${file}`, explanation: "Print the first 160 lines of a file without editing it.", command: `sed -n '1,160p' ${quote(file)}`, risk: "safe", notes: ["Change the path if the file is elsewhere."] };
+    return { ...base, title: `Read ${file}`, explanation: "Print the first 160 lines of a file without editing it.", command: `sed -n '1,160p' ${quotePath(file)}`, risk: "safe", notes: ["Change the path if the file is elsewhere."] };
   }
 
   const install = request.match(/(?:install|add)\s+(?:the\s+)?(?:package\s+)?([a-z0-9][\w+.-]*)/i);

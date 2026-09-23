@@ -4,25 +4,33 @@
 // clipboard, window controls, and file I/O to the correct layer.
 // In browser: falls back to localStorage + navigator.clipboard.
 // In Electron: uses native IPC via electronBridge.
+// All returned objects and functions are referentially stable.
 // ============================================================
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   isElectron,
   maybeElectronAPI,
-  UpdaterStatus,
+  type AIAskResult,
+  type MenuAction,
+  type TerminalDataEvent,
+  type TerminalExitEvent,
+  type TerminalResult,
+  type TerminalStartResult,
+  type UpdaterStatus,
 } from "./electronBridge";
 import {
   UXSettings,
   loadSettings,
   saveSettings,
   resetSettings,
+  validateSettings,
 } from "../engine/UXSettings";
 
 // ── Platform info snapshot ──
 export interface PlatformInfo {
   runtime:   "electron" | "browser";
   platform:  string;      // "linux" | "darwin" | "win32" | "web"
-  version:   string;      // app version (Electron) or build version (web)
+  version:   string;      // app version
   logDir:    string;      // native log dir or "(browser)"
 }
 
@@ -32,6 +40,17 @@ export interface WindowControls {
   maximize:    () => void;
   close:       () => void;
   isMaximized: boolean;
+}
+
+export interface PlatformTerminal {
+  start:     () => Promise<TerminalStartResult>;
+  write:     (id: string, input: string) => Promise<TerminalResult>;
+  resize:    (id: string, cols: number, rows: number) => Promise<TerminalResult>;
+  interrupt: (id: string) => Promise<TerminalResult>;
+  ack:       (id: string, chars: number) => void;
+  kill:      (id: string) => Promise<TerminalResult>;
+  onData:    (cb: (event: TerminalDataEvent) => void) => () => void;
+  onExit:    (cb: (event: TerminalExitEvent) => void) => () => void;
 }
 
 // ── Full platform hook return ──
@@ -49,33 +68,18 @@ export interface UsePlatformResult {
   copyToClipboard: (text: string) => Promise<boolean>;
   readClipboard:   () => Promise<string>;
 
-  // File I/O (Electron only — no-op in browser)
+  // File I/O (download / file picker in the browser)
   saveLog:  (content: string) => Promise<{ ok: boolean; path?: string; error?: string }>;
   openLog:  () => Promise<{ ok: boolean; content?: string; path?: string; error?: string }>;
 
   // Local AI provider (optional; browser uses the deterministic fallback)
-  ai: {
-    ask: (request: string) => Promise<{
-      ok: boolean;
-      source?: "ollama";
-      title?: string;
-      explanation?: string;
-      command?: string;
-      risk?: "safe" | "review" | "dangerous";
-      notes?: string[];
-      error?: string;
-    }>;
-  };
+  ai: { ask: (request: string) => Promise<AIAskResult> };
 
   // Native shell session (Electron only — browser stays sandboxed)
-  terminal: {
-    start: () => Promise<{ ok: boolean; id?: string; cwd?: string; shell?: string; pty?: boolean; error?: string }>;
-    write: (id: string, input: string) => Promise<{ ok: boolean; error?: string }>;
-    resize: (id: string, cols: number, rows: number) => Promise<{ ok: boolean; error?: string }>;
-    kill: (id: string) => Promise<{ ok: boolean; error?: string }>;
-    onData: (cb: (event: { id: string; data: string; stderr?: boolean }) => void) => () => void;
-    onExit: (cb: (event: { id: string; code: number | null; signal: string | null }) => void) => () => void;
-  };
+  terminal: PlatformTerminal;
+
+  // Native menu actions (Electron only)
+  onMenuAction: (cb: (action: MenuAction) => void) => () => void;
 
   // Window controls (Electron only — no-op in browser)
   window: WindowControls;
@@ -87,83 +91,82 @@ export interface UsePlatformResult {
   installUpdate:    () => Promise<void>;
 }
 
+const DESKTOP_ONLY = "Native shell is available in the desktop app";
+const noop = () => undefined;
+
 // ────────────────────────────────────────────────────────────
 // HOOK IMPLEMENTATION
 // ────────────────────────────────────────────────────────────
 export function usePlatform(): UsePlatformResult {
-  const electron = maybeElectronAPI();
+  // window.electronAPI is fixed for the page's lifetime.
+  const electron = useMemo(() => maybeElectronAPI(), []);
   const [ready, setReady] = useState(false);
   const [platform, setPlatform] = useState<PlatformInfo>({
     runtime:  isElectron() ? "electron" : "browser",
     platform: "web",
-    version:  "2.0.0",
+    version:  __APP_VERSION__,
     logDir:   "(browser)",
   });
   const [isMaximized, setIsMaximized] = useState(false);
   const [updaterStatus, setUpdaterStatus] = useState<UpdaterStatus>({ state: "idle" });
-  const updaterCleanupRef = useRef<(() => void) | null>(null);
 
   // ── Hydrate platform info on mount ──
   useEffect(() => {
+    let disposed = false;
+    const cleanups: Array<() => void> = [];
+
     async function init() {
       if (electron) {
-        const [ver, plat, logDir, isMax] = await Promise.all([
+        cleanups.push(electron.updater.onStatus(status => setUpdaterStatus(status)));
+        cleanups.push(electron.window.onMaximizedChange(setIsMaximized));
+
+        const [ver, plat, logDir, isMax, status] = await Promise.all([
           electron.app.version().catch(() => "unknown"),
           electron.app.platform().catch(() => "unknown"),
           electron.app.logDir().catch(() => "(unavailable)"),
           electron.window.isMaximized().catch(() => false),
+          electron.updater.status().catch((): UpdaterStatus => ({ state: "idle" })),
         ]);
-        setPlatform({
-          runtime:  "electron",
-          platform: plat,
-          version:  ver,
-          logDir,
-        });
-        setIsMaximized(isMax);
-
-        // Subscribe to updater status pushes
-        updaterCleanupRef.current = electron.updater.onStatus(status => {
-          setUpdaterStatus(status as UpdaterStatus);
-        });
-
-        // Get initial updater status
-        const s = await electron.updater.status().catch(() => ({ state: "idle" as const }));
-        setUpdaterStatus(s);
+        if (disposed) return;
+        setPlatform({ runtime: "electron", platform: plat, version: ver, logDir });
+        setIsMaximized(isMax === true);
+        setUpdaterStatus(status);
       }
-      setReady(true);
+      if (!disposed) setReady(true);
     }
-    init();
+    void init();
 
     return () => {
-      updaterCleanupRef.current?.();
+      disposed = true;
+      cleanups.forEach(cleanup => cleanup());
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [electron]);
 
   // ── Settings — route to native or localStorage ──
   const loadNativeSettings = useCallback(async (): Promise<UXSettings> => {
-    if (electron) {
-      try {
-        const native = await electron.settings.get();
-        if (native && typeof native === "object") {
-          // Merge with defaults (same strategy as localStorage path)
-          return { ...loadSettings(), ...(native as Partial<UXSettings>) };
-        }
-      } catch {
-        // Fall through to localStorage
+    const local = loadSettings();
+    if (!electron) return local;
+    try {
+      const native = await electron.settings.get();
+      if (native && typeof native === "object" && !Array.isArray(native)) {
+        // Native values are validated the same way as localStorage values.
+        return { ...local, ...validateSettings(native as Partial<UXSettings>).validated };
       }
+    } catch (error) {
+      console.warn("[settings] native store unavailable, using local copy", error);
     }
-    return loadSettings();
+    return local;
   }, [electron]);
 
   const saveNativeSettings = useCallback(async (s: UXSettings): Promise<void> => {
-    // Always write localStorage as fallback
+    // Always write localStorage as a fallback copy.
     saveSettings(s);
-    if (electron) {
-      try {
-        await electron.settings.set(s);
-      } catch {
-        // localStorage already saved — non-fatal
-      }
+    if (!electron) return;
+    try {
+      const result = await electron.settings.set(s);
+      if (!result.ok) console.warn("[settings] native save failed:", result.error);
+    } catch (error) {
+      console.warn("[settings] native save failed", error);
     }
   }, [electron]);
 
@@ -172,8 +175,8 @@ export function usePlatform(): UsePlatformResult {
     if (electron) {
       try {
         await electron.settings.reset();
-      } catch {
-        // non-fatal
+      } catch (error) {
+        console.warn("[settings] native reset failed", error);
       }
     }
     return defaults;
@@ -207,18 +210,16 @@ export function usePlatform(): UsePlatformResult {
 
   // ── File I/O ──
   const saveLog = useCallback(async (content: string) => {
-    if (electron) {
-      return electron.file.saveLog(content);
-    }
-    // Browser fallback: trigger download
+    if (electron) return electron.file.saveLog(content);
+    // Browser fallback: trigger a download.
     try {
       const blob = new Blob([content], { type: "text/plain" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `x86-terminal-${Date.now()}.log`;
+      a.download = `ai-terminal-${new Date().toISOString().replace(/[:.]/g, "-")}.log`;
       a.click();
-      URL.revokeObjectURL(url);
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
       return { ok: true };
     } catch (err) {
       return { ok: false, error: String(err) };
@@ -226,10 +227,8 @@ export function usePlatform(): UsePlatformResult {
   }, [electron]);
 
   const openLog = useCallback(async () => {
-    if (electron) {
-      return electron.file.openLog();
-    }
-    // Browser fallback: file input
+    if (electron) return electron.file.openLog();
+    // Browser fallback: file input.
     return new Promise<{ ok: boolean; content?: string; error?: string }>(resolve => {
       const input = document.createElement("input");
       input.type = "file";
@@ -238,8 +237,7 @@ export function usePlatform(): UsePlatformResult {
         const file = input.files?.[0];
         if (!file) { resolve({ ok: false, error: "No file selected" }); return; }
         try {
-          const content = await file.text();
-          resolve({ ok: true, content });
+          resolve({ ok: true, content: await file.text() });
         } catch (err) {
           resolve({ ok: false, error: String(err) });
         }
@@ -250,67 +248,56 @@ export function usePlatform(): UsePlatformResult {
   }, [electron]);
 
   // ── Local AI provider ──
-  const ai = {
-    ask: useCallback(async (request: string) => {
+  const ai = useMemo(() => ({
+    ask: async (request: string): Promise<AIAskResult> => {
       if (electron) return electron.ai.ask(request);
       return { ok: false, error: "Local model bridge is available in the desktop app" };
-    }, [electron]),
-  };
+    },
+  }), [electron]);
 
   // ── Native shell session ──
   // Browser builds deliberately return a clear capability error rather than
   // pretending that a web page can execute commands on the user's machine.
-  const terminal = {
-    start: useCallback(async () => {
-      if (electron) return electron.terminal.start();
-      return { ok: false, error: "Native shell is available in the desktop app" };
-    }, [electron]),
-    write: useCallback(async (id: string, input: string) => {
-      if (electron) return electron.terminal.write(id, input);
-      return { ok: false, error: "Native shell is available in the desktop app" };
-    }, [electron]),
-    resize: useCallback(async (id: string, cols: number, rows: number) => {
-      if (electron) return electron.terminal.resize(id, cols, rows);
-      return { ok: false, error: "Native shell is available in the desktop app" };
-    }, [electron]),
-    kill: useCallback(async (id: string) => {
-      if (electron) return electron.terminal.kill(id);
-      return { ok: false, error: "Native shell is available in the desktop app" };
-    }, [electron]),
-    onData: useCallback((cb: (event: { id: string; data: string; stderr?: boolean }) => void) => {
-      return electron ? electron.terminal.onData(cb) : () => undefined;
-    }, [electron]),
-    onExit: useCallback((cb: (event: { id: string; code: number | null; signal: string | null }) => void) => {
-      return electron ? electron.terminal.onExit(cb) : () => undefined;
-    }, [electron]),
-  };
+  const terminal = useMemo<PlatformTerminal>(() => ({
+    start:     async () => electron ? electron.terminal.start() : { ok: false, error: DESKTOP_ONLY },
+    write:     async (id, input) => electron ? electron.terminal.write(id, input) : { ok: false, error: DESKTOP_ONLY },
+    resize:    async (id, cols, rows) => electron ? electron.terminal.resize(id, cols, rows) : { ok: false, error: DESKTOP_ONLY },
+    interrupt: async id => electron ? electron.terminal.interrupt(id) : { ok: false, error: DESKTOP_ONLY },
+    ack:       (id, chars) => { if (electron) void electron.terminal.ack(id, chars).catch(noop); },
+    kill:      async id => electron ? electron.terminal.kill(id) : { ok: false, error: DESKTOP_ONLY },
+    onData:    cb => electron ? electron.terminal.onData(cb) : noop,
+    onExit:    cb => electron ? electron.terminal.onExit(cb) : noop,
+  }), [electron]);
+
+  const onMenuAction = useCallback((cb: (action: MenuAction) => void) => {
+    return electron ? electron.menu.onAction(cb) : noop;
+  }, [electron]);
 
   // ── Window controls ──
-  const windowControls: WindowControls = {
-    minimize:    useCallback(() => { electron?.window.minimize(); }, [electron]),
-    maximize:    useCallback(async () => {
-      if (electron) {
-        await electron.window.maximize();
-        const isMax = await electron.window.isMaximized().catch(() => false);
-        setIsMaximized(isMax);
-      }
-    }, [electron]),
-    close:       useCallback(() => { electron?.window.close(); }, [electron]),
-    isMaximized,
-  };
+  const minimize = useCallback(() => { void electron?.window.minimize(); }, [electron]);
+  const maximize = useCallback(() => { void electron?.window.maximize(); }, [electron]);
+  const close = useCallback(() => { void electron?.window.close(); }, [electron]);
+  const windowControls = useMemo<WindowControls>(
+    () => ({ minimize, maximize, close, isMaximized }),
+    [minimize, maximize, close, isMaximized],
+  );
 
   // ── Updater ──
+  const reportUpdaterFailure = useCallback((result: { ok: boolean; error?: string }) => {
+    if (!result.ok && result.error) setUpdaterStatus({ state: "error", message: result.error });
+  }, []);
+
   const checkForUpdates = useCallback(async () => {
-    if (electron) await electron.updater.check().catch(() => {});
-  }, [electron]);
+    if (electron) reportUpdaterFailure(await electron.updater.check().catch(error => ({ ok: false, error: String(error) })));
+  }, [electron, reportUpdaterFailure]);
 
   const downloadUpdate = useCallback(async () => {
-    if (electron) await electron.updater.download().catch(() => {});
-  }, [electron]);
+    if (electron) reportUpdaterFailure(await electron.updater.download().catch(error => ({ ok: false, error: String(error) })));
+  }, [electron, reportUpdaterFailure]);
 
   const installUpdate = useCallback(async () => {
-    if (electron) await electron.updater.install().catch(() => {});
-  }, [electron]);
+    if (electron) reportUpdaterFailure(await electron.updater.install().catch(error => ({ ok: false, error: String(error) })));
+  }, [electron, reportUpdaterFailure]);
 
   return {
     platform,
@@ -324,6 +311,7 @@ export function usePlatform(): UsePlatformResult {
     openLog,
     ai,
     terminal,
+    onMenuAction,
     window: windowControls,
     updaterStatus,
     checkForUpdates,

@@ -385,28 +385,41 @@ export default function App() {
     }
   }, [currentToast, toastQueue]);
 
-  // ── Electron menu events ──
-  useEffect(() => {
-    if (!isElectron()) return;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const win = window as any;
-    const onSaveLog = () => platform.saveLog(history.flatMap(e => e.lines).join("\n"));
-    const onOpenLog = async () => {
-      const result = await platform.openLog();
-      if (result.ok && result.content) {
-        setHistory(prev => [...prev, { type: "output", lines: ["[FILE] Log loaded:", ...result.content!.split("\n").slice(0, 200)], ts: timestamp() }]);
-      }
-    };
-    const onOpenSettings = () => setShowSettings(true);
-    win.addEventListener("menu:saveLog",      onSaveLog);
-    win.addEventListener("menu:openLog",      onOpenLog);
-    win.addEventListener("menu:openSettings", onOpenSettings);
-    return () => {
-      win.removeEventListener("menu:saveLog",      onSaveLog);
-      win.removeEventListener("menu:openLog",      onOpenLog);
-      win.removeEventListener("menu:openSettings", onOpenSettings);
-    };
-  }, [history, platform]);
+  // ── Native menu actions (Electron) ──
+  // Read the latest workspace/history through a ref so the subscription
+  // is made once rather than on every history change.
+  const shellTranscriptRef = useRef<(() => string) | null>(null);
+  const menuContextRef = useRef({ workspace, history });
+  useEffect(() => { menuContextRef.current = { workspace, history }; }, [workspace, history]);
+
+  useEffect(() => platform.onMenuAction(action => {
+    const context = menuContextRef.current;
+    if (action === "openSettings") {
+      setWorkspace("lab");
+      setShowSettings(true);
+      return;
+    }
+    if (action === "saveLog") {
+      const content = context.workspace === "shell"
+        ? shellTranscriptRef.current?.() ?? ""
+        : context.history.flatMap(entry => entry.lines).join("\n");
+      void platform.saveLog(content).then(result => {
+        if (!result.ok && result.error !== "Cancelled") console.warn("[menu] save log failed:", result.error);
+        if (context.workspace === "lab" && result.ok) {
+          setHistory(prev => [...prev, { type: "output", lines: [`[FILE] Log saved${result.path ? ` to ${result.path}` : ""}`], ts: timestamp() }]);
+        }
+      });
+      return;
+    }
+    if (action === "openLog") {
+      void platform.openLog().then(result => {
+        if (!result.ok || result.content === undefined) return;
+        const content = result.content;
+        setWorkspace("lab");
+        setHistory(prev => [...prev, { type: "output", lines: ["[FILE] Log loaded:", ...content.split("\n").slice(0, 200)], ts: timestamp() }]);
+      });
+    }
+  }), [platform]);
 
   const handleSettingsChange = useCallback((s: UXSettings) => setSettings(s), []);
 
@@ -551,13 +564,26 @@ export default function App() {
 
   if (workspace === "shell") {
     return (
-      <RealTerminal
-        platform={platform}
-        thm={thm}
-        fontStack={fontStack}
-        onOpenLab={() => setWorkspace("lab")}
-        onOpenSettings={() => { setWorkspace("lab"); setShowSettings(true); }}
-      />
+      <div className="app-frame">
+        <NativeTitleBar
+          title="AI Terminal"
+          thm={thm}
+          window={platform.window}
+          updaterStatus={platform.updaterStatus}
+          onCheckUpdates={platform.checkForUpdates}
+          onDownload={platform.downloadUpdate}
+          onInstall={platform.installUpdate}
+          platform={platform.platform.platform}
+        />
+        <RealTerminal
+          platform={platform}
+          thm={thm}
+          fontStack={fontStack}
+          onOpenLab={() => setWorkspace("lab")}
+          onOpenSettings={() => { setWorkspace("lab"); setShowSettings(true); }}
+          transcriptRef={shellTranscriptRef}
+        />
+      </div>
     );
   }
 
