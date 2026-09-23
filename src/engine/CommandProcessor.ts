@@ -3232,8 +3232,6 @@ function cmdNetCopy(args: string[], state: TerminalState): string[] {
   const layerDefs = net.layers.map(l => ({
     inFeatures: l.inF, outFeatures: l.outF, activation: l.activation
   }));
-  const { MLP: MLPCtor } = require ? { MLP: null } : { MLP: null };
-  void MLPCtor;
   const copy = new MLP(layerDefs);
   // Copy weights
   for (let i = 0; i < net.layers.length; i++) {

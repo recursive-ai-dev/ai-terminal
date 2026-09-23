@@ -14,20 +14,23 @@ import {
   session,
 } from "electron";
 import * as path from "path";
-import * as url from "url";
 import { registerSettingsHandlers } from "./ipc/settings";
 import { registerShellHandlers }    from "./ipc/shell";
 import { registerUpdaterHandlers }  from "./ipc/updater";
+import { registerTerminalHandlers } from "./ipc/terminal";
+import { registerAIHandlers }       from "./ipc/ai";
 import { IPC } from "./ipc/channels";
 
 // ── Environment detection ──
 const isDev = !app.isPackaged;
 
-// ── ESM __dirname shim (electron main is CJS target) ──
-const __dirname_main = path.dirname(url.fileURLToPath(import.meta.url));
+// ── CommonJS main-process directory ──
+// tsconfig.electron.json intentionally emits CommonJS so Electron can load
+// the main process in both packaged and development builds.
+const __dirname_main = __dirname;
 
 // ── App constants ──
-const APP_TITLE   = "x86_64 Neural Terminal";
+const APP_TITLE   = "AI Terminal";
 const WIN_WIDTH   = 1280;
 const WIN_HEIGHT  = 820;
 const MIN_WIDTH   = 800;
@@ -73,7 +76,6 @@ function createWindow(): BrowserWindow {
   if (isDev) {
     // Vite dev server — adjust port if needed
     win.loadURL("http://localhost:5173").catch(console.error);
-    win.webContents.openDevTools({ mode: "detach" });
   } else {
     win.loadFile(
       path.join(__dirname_main, "../dist/index.html")
@@ -310,6 +312,8 @@ async function bootstrap(): Promise<void> {
   applyCSP();
   registerWindowHandlers();
   registerShellHandlers();
+  registerTerminalHandlers();
+  registerAIHandlers();
   await registerSettingsHandlers();
 
   mainWindow = createWindow();

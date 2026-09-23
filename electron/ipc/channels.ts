@@ -36,7 +36,18 @@ export const IPC = {
 
   // ── Native file I/O (optional future use) ──
   FILE_SAVE_LOG:   "file:saveLog",
-  FILE_OPEN_LOG:   "file:openLog",
+  FILE_OPEN_LOG:  "file:openLog",
+
+  // ── Local AI provider ──
+  AI_ASK:          "ai:ask",
+
+  // ── Native terminal session ──
+  TERMINAL_START:  "terminal:start",
+  TERMINAL_WRITE:  "terminal:write",
+  TERMINAL_RESIZE: "terminal:resize",
+  TERMINAL_KILL:   "terminal:kill",
+  TERMINAL_DATA:   "terminal:data",
+  TERMINAL_EXIT:   "terminal:exit",
 } as const;
 
 export type IPCChannel = typeof IPC[keyof typeof IPC];

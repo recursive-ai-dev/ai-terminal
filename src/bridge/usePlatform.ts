@@ -53,6 +53,30 @@ export interface UsePlatformResult {
   saveLog:  (content: string) => Promise<{ ok: boolean; path?: string; error?: string }>;
   openLog:  () => Promise<{ ok: boolean; content?: string; path?: string; error?: string }>;
 
+  // Local AI provider (optional; browser uses the deterministic fallback)
+  ai: {
+    ask: (request: string) => Promise<{
+      ok: boolean;
+      source?: "ollama";
+      title?: string;
+      explanation?: string;
+      command?: string;
+      risk?: "safe" | "review" | "dangerous";
+      notes?: string[];
+      error?: string;
+    }>;
+  };
+
+  // Native shell session (Electron only — browser stays sandboxed)
+  terminal: {
+    start: () => Promise<{ ok: boolean; id?: string; cwd?: string; shell?: string; pty?: boolean; error?: string }>;
+    write: (id: string, input: string) => Promise<{ ok: boolean; error?: string }>;
+    resize: (id: string, cols: number, rows: number) => Promise<{ ok: boolean; error?: string }>;
+    kill: (id: string) => Promise<{ ok: boolean; error?: string }>;
+    onData: (cb: (event: { id: string; data: string; stderr?: boolean }) => void) => () => void;
+    onExit: (cb: (event: { id: string; code: number | null; signal: string | null }) => void) => () => void;
+  };
+
   // Window controls (Electron only — no-op in browser)
   window: WindowControls;
 
@@ -225,6 +249,42 @@ export function usePlatform(): UsePlatformResult {
     });
   }, [electron]);
 
+  // ── Local AI provider ──
+  const ai = {
+    ask: useCallback(async (request: string) => {
+      if (electron) return electron.ai.ask(request);
+      return { ok: false, error: "Local model bridge is available in the desktop app" };
+    }, [electron]),
+  };
+
+  // ── Native shell session ──
+  // Browser builds deliberately return a clear capability error rather than
+  // pretending that a web page can execute commands on the user's machine.
+  const terminal = {
+    start: useCallback(async () => {
+      if (electron) return electron.terminal.start();
+      return { ok: false, error: "Native shell is available in the desktop app" };
+    }, [electron]),
+    write: useCallback(async (id: string, input: string) => {
+      if (electron) return electron.terminal.write(id, input);
+      return { ok: false, error: "Native shell is available in the desktop app" };
+    }, [electron]),
+    resize: useCallback(async (id: string, cols: number, rows: number) => {
+      if (electron) return electron.terminal.resize(id, cols, rows);
+      return { ok: false, error: "Native shell is available in the desktop app" };
+    }, [electron]),
+    kill: useCallback(async (id: string) => {
+      if (electron) return electron.terminal.kill(id);
+      return { ok: false, error: "Native shell is available in the desktop app" };
+    }, [electron]),
+    onData: useCallback((cb: (event: { id: string; data: string; stderr?: boolean }) => void) => {
+      return electron ? electron.terminal.onData(cb) : () => undefined;
+    }, [electron]),
+    onExit: useCallback((cb: (event: { id: string; code: number | null; signal: string | null }) => void) => {
+      return electron ? electron.terminal.onExit(cb) : () => undefined;
+    }, [electron]),
+  };
+
   // ── Window controls ──
   const windowControls: WindowControls = {
     minimize:    useCallback(() => { electron?.window.minimize(); }, [electron]),
@@ -262,6 +322,8 @@ export function usePlatform(): UsePlatformResult {
     readClipboard,
     saveLog,
     openLog,
+    ai,
+    terminal,
     window: windowControls,
     updaterStatus,
     checkForUpdates,

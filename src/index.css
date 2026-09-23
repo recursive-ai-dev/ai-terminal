@@ -1,5 +1,6 @@
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Fira+Code:wght@300;400;500;700&family=IBM+Plex+Mono:wght@300;400;500;700&family=Share+Tech+Mono&family=VT323&family=Orbitron:wght@400;700;900&display=swap');
 @import "tailwindcss";
+@import "./ai-shell.css";
 
 /* ================================================================
    X86_64 NEURAL TERMINAL — DRAMATIC VISUAL ENGINE v5.0
