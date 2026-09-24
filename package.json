@@ -1,41 +1,69 @@
 {
   "name": "ai-terminal",
+  "productName": "AI Terminal",
+  "desktopName": "ai-terminal.desktop",
   "private": true,
   "version": "1.0.0",
   "description": "Linux-native AI terminal with an approval-first copilot and neural computing lab",
   "author": "AI Terminal",
+  "homepage": "https://github.com/recursive-ai-dev/ai-terminal",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/recursive-ai-dev/ai-terminal.git"
+  },
   "main": "electron-dist/main.js",
   "type": "module",
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "electron:compile": "tsc -p tsconfig.electron.json && node scripts/write-electron-package.mjs",
-    "electron:dev": "npm run build && npm run electron:compile && electron electron-dist/main.js",
-    "electron:build": "npm run build && npm run electron:compile && electron-builder",
-    "dist:linux": "npm run build && npm run electron:compile && electron-builder --linux appimage"
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.electron.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "npm run typecheck && npm run test && npm run build && npm run electron:compile",
+    "build:renderer": "vite build --mode electron",
+    "build:main": "node scripts/build-electron.mjs --production",
+    "electron:compile": "npm run build:renderer && npm run build:main",
+    "electron:dev": "node scripts/electron-dev.mjs",
+    "electron:start": "npm run electron:compile && electron .",
+    "electron:build": "npm run electron:compile && electron-builder",
+    "dist:linux": "npm run electron:compile && electron-builder --linux AppImage",
+    "dist:win": "npm run electron:compile && electron-builder --win nsis",
+    "dist:mac": "npm run electron:compile && electron-builder --mac dmg",
+    "rebuild:native": "electron-builder install-app-deps"
   },
   "dependencies": {
-    "clsx": "2.1.1",
-    "electron-store": "^11.0.2",
-    "electron-updater": "^6.8.9",
-    "react": "19.2.3",
-    "react-dom": "19.2.3",
-    "tailwind-merge": "3.4.0"
+    "electron-updater": "^6.8.9"
   },
   "devDependencies": {
+    "@fontsource/fira-code": "^5.3.0",
+    "@fontsource/ibm-plex-mono": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "@fontsource/share-tech-mono": "^5.3.0",
+    "@fontsource/vt323": "^5.3.0",
     "@tailwindcss/vite": "4.1.17",
-    "@types/electron": "^1.4.38",
     "@types/node": "^22.0.0",
     "@types/react": "19.2.7",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "5.1.1",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/xterm": "^6.0.0",
+    "clsx": "2.1.1",
     "electron": "^44.4.3",
     "electron-builder": "^26.15.3",
+    "esbuild": "^0.25.12",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "tailwind-merge": "3.4.0",
     "tailwindcss": "4.1.17",
     "typescript": "5.9.3",
     "vite": "7.2.4",
-    "vite-plugin-singlefile": "2.3.0"
+    "vite-plugin-singlefile": "2.3.0",
+    "vitest": "^5.0.1"
   },
   "optionalDependencies": {
     "node-pty": "^1.1.0"

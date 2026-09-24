@@ -43,6 +43,7 @@ import {
   diffSettings,
   loadSettingsVersioned,
   DEFAULT_SETTINGS,
+  SETTINGS_SCHEMA_VERSION,
 } from "./UXSettings";
 import type { UXSettings } from "./UXSettings";
 import { makeFakeClock } from "./determinism";
@@ -157,14 +158,14 @@ export function runSettingsChainTests(): string[] {
   {
     clearSettingsCache();
     const prev = makeSettings({ fontSize: 14 });
-    // 9 is below min(10), 30 is above max(24)
+    // 9 is below min(10), 30 is above max(28)
     const r1 = executeSettingsChange(prev, { fontSize: 9 }, "corr-s04a");
     const r2 = executeSettingsChange(prev, { fontSize: 30 }, "corr-s04b");
-    // clampInt returns 10/24 — valid — so chain succeeds
+    // clampInt returns 10/28 — valid — so chain succeeds
     assert("S04a fontSize=9 → clamped Ok", r1.ok);
     if (r1.ok) assertEqual("S04a clamped to 10", r1.value.next.fontSize, 10);
     assert("S04b fontSize=30 → clamped Ok", r2.ok);
-    if (r2.ok) assertEqual("S04b clamped to 24", r2.value.next.fontSize, 24);
+    if (r2.ok) assertEqual("S04b clamped to 28", r2.value.next.fontSize, 28);
   }
 
   // ── S05: Invalid enum colorTheme → rejected ───────────────
@@ -395,13 +396,13 @@ export function runSettingsChainTests(): string[] {
   // ── S21: loadSettingsVersioned handles versioned format ──
   {
     withFakeStorage(store => {
-      store["x86_neural_ux_settings"] = JSON.stringify({
-        __version: 1,
+      store["x86_neural_ux_settings_v3"] = JSON.stringify({
+        __version: SETTINGS_SCHEMA_VERSION,
         settings: { ...DEFAULT_SETTINGS, fontSize: 22 }
       });
       const r = loadSettingsVersioned();
       assert("S21 migrated=false for current version", r.migrated === false);
-      assertEqual("S21 version=1", r.version, 1);
+      assertEqual("S21 version=current", r.version, SETTINGS_SCHEMA_VERSION);
       assertEqual("S21 fontSize=22", r.settings.fontSize, 22);
     });
   }

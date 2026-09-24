@@ -1,196 +1,56 @@
-# Building the x86 Neural Terminal AppImage
+# Building and releasing the AppImage
 
 ## Prerequisites
 
 | Tool | Version | Notes |
 |------|---------|-------|
-| Node.js | 18+ | LTS recommended |
-| npm | 9+ | Comes with Node |
-| Linux | Any x64/arm64 distro | For AppImage |
-| `fuse` | kernel module | `sudo apt install fuse libfuse2` (Ubuntu) |
+| Node.js | ≥ 20.19 (22 LTS recommended) | |
+| Build tools | `python3`, `make`, `g++` | Needed to compile `node-pty`. On Debian/Ubuntu: `sudo apt install build-essential python3` |
+| FUSE 2 | runtime only | Needed to *run* an AppImage. On Ubuntu 22.04+: `sudo apt install libfuse2` |
 
----
-
-## Step 1 — Install all dependencies
+## Build
 
 ```bash
-npm install
-
-# Install Electron-specific packages (not in web package.json)
-npm install --save-dev \
-  electron@latest \
-  electron-builder@latest \
-  electron-store@latest \
-  electron-updater@latest \
-  @types/electron
+npm ci
+npm run check        # typecheck, tests, both production builds
+npm run dist:linux   # → release/ai-terminal-<version>-x86_64.AppImage
 ```
 
----
+`dist:linux` runs three stages:
 
-## Step 2 — Add build scripts to package.json
+1. `vite build --mode electron` bundles the renderer into `dist/`. This build uses relative asset URLs and embeds the Content Security Policy as a `<meta>` tag.
+2. `scripts/build-electron.mjs` bundles `electron/main.ts` and `electron/preload.ts` into `electron-dist/` with esbuild. The preload must be a single file because sandboxed preloads cannot `require()` local modules.
+3. `electron-builder --linux AppImage` rebuilds `node-pty` for Electron's ABI, packs `app.asar` (with `node-pty` unpacked), and produces the AppImage.
 
-Add these to the `"scripts"` section of `package.json`:
+For arm64, build on an arm64 machine: `npm run dist:linux -- --arm64`. Cross-compiling `node-pty` is not supported.
 
-```json
-{
-  "scripts": {
-    "dev":              "vite",
-    "build":            "vite build",
-    "preview":          "vite preview",
-
-    "electron:compile": "tsc -p tsconfig.electron.json",
-    "electron:dev":     "npm run build && npm run electron:compile && electron electron-dist/main.js",
-    "electron:build":   "npm run build && npm run electron:compile && electron-builder",
-
-    "dist:linux":       "npm run build && npm run electron:compile && electron-builder --linux appimage",
-    "dist:win":         "npm run build && npm run electron:compile && electron-builder --win nsis",
-    "dist:mac":         "npm run build && npm run electron:compile && electron-builder --mac dmg",
-    "dist:all":         "npm run build && npm run electron:compile && electron-builder -mwl"
-  }
-}
-```
-
----
-
-## Step 3 — Generate app icons
-
-AppImage requires icons at specific sizes. Generate from any source PNG (512x512 minimum):
+## Run
 
 ```bash
-# Install imagemagick
-sudo apt install imagemagick   # Ubuntu/Debian
-brew install imagemagick        # macOS
-
-# Create all required sizes
-mkdir -p assets
-convert source-icon.png -resize 512x512 assets/icon.png
-convert source-icon.png -resize 256x256 assets/icon-256.png
-convert source-icon.png -resize 128x128 assets/icon-128.png
-convert source-icon.png -resize 48x48   assets/icon-48.png
-convert source-icon.png -resize 16x16   assets/icon-16.png
-convert source-icon.png                 assets/tray-icon.png  # 16x16 or 22x22 for tray
-
-# Windows (requires Wine or Windows build host)
-convert source-icon.png assets/icon.ico
-
-# macOS
-# Use iconutil or electron-icon-maker
-npx electron-icon-maker --input=source-icon.png --output=assets
+chmod +x release/ai-terminal-*.AppImage
+./release/ai-terminal-*.AppImage
 ```
 
-A minimal placeholder (any PNG) will work for development builds.
-
----
-
-## Step 4 — Build the AppImage
+Without FUSE:
 
 ```bash
-# Linux AppImage (x64)
-npm run dist:linux
-
-# Output: release/x86-neural-terminal-2.0.0-x64.AppImage
-```
-
----
-
-## Step 5 — Run the AppImage
-
-```bash
-chmod +x release/x86-neural-terminal-2.0.0-x64.AppImage
-./release/x86-neural-terminal-2.0.0-x64.AppImage
-```
-
-### If FUSE is unavailable:
-```bash
-# Extract and run without FUSE
-./release/x86-neural-terminal-2.0.0-x64.AppImage --appimage-extract
+./release/ai-terminal-*.AppImage --appimage-extract
 ./squashfs-root/AppRun
 ```
 
----
+## Release (auto-update)
 
-## Step 6 — Development mode (hot-reload)
+1. Set `version` in `package.json` (for example, `1.0.1`) and commit.
+2. Tag the commit and push the tag: `git tag v1.0.1 && git push origin v1.0.1`.
+3. The **Release** workflow checks that the tag matches `package.json`. It then builds x64 and arm64 AppImages and publishes them, together with `latest-linux.yml` and `latest-linux-arm64.yml`, to the GitHub release for that tag.
 
-```bash
-# Terminal 1: Vite dev server
-npm run dev
+Installed AppImages check for updates quietly about 15 seconds after start-up. The title bar shows when an update is available. Downloading and restarting always require a click. The updater is off in development builds and in non-AppImage Linux installs, which your package manager updates instead. Setting `AI_TERMINAL_DISABLE_UPDATES=1` also turns it off.
 
-# Terminal 2: Electron pointing at Vite (port 5173)
-npm run electron:compile && electron electron-dist/main.js
-```
+## Troubleshooting
 
----
-
-## Architecture of the Built App
-
-```
-release/
-  x86-neural-terminal-2.0.0-x64.AppImage   ← Linux portable executable
-  x86-neural-terminal-2.0.0-setup.exe       ← Windows NSIS installer
-  x86-neural-terminal-2.0.0-x64.dmg         ← macOS disk image
-
-electron-dist/                               ← Compiled main process
-  main.js                                    ← Entry point
-  preload.js                                 ← contextBridge
-  ipc/
-    channels.js
-    settings.js                              ← ~/.config persistence
-    shell.js                                 ← clipboard, file dialogs
-    updater.js                               ← electron-updater
-
-dist/                                        ← Vite renderer build
-  index.html
-  assets/
-    index-[hash].js                          ← All React + engine code
-    index-[hash].css
-
-src/bridge/                                  ← Renderer ↔ Main bridge
-  electronBridge.ts                          ← Typed IPC API surface
-  usePlatform.ts                             ← React hook (Electron/browser)
-```
-
----
-
-## Settings Persistence
-
-| Runtime | Location |
-|---------|----------|
-| Electron (Linux) | `~/.config/x86-neural-terminal-ux/config.json` |
-| Electron (Windows) | `%APPDATA%\x86-neural-terminal-ux\config.json` |
-| Electron (macOS) | `~/Library/Application Support/x86-neural-terminal-ux/config.json` |
-| Browser | `localStorage["x86_neural_ux_settings"]` |
-
-Settings are **always written to both** localStorage AND native store when in Electron, so they survive both browser testing and native runs.
-
----
-
-## Auto-Updater Setup
-
-1. Push a release to GitHub with the tag `v2.0.1`
-2. Upload the AppImage as a release asset
-3. electron-updater checks `https://github.com/YOUR_USER/x86-neural-terminal/releases/latest`
-4. The renderer shows the update badge automatically
-5. User clicks "download" → "restart to update"
-
-Update `electron-builder.yml`:
-```yaml
-publish:
-  provider: github
-  owner: YOUR_GITHUB_USERNAME
-  repo: x86-neural-terminal
-```
-
----
-
-## Security Model
-
-| Setting | Value | Reason |
-|---------|-------|--------|
-| `nodeIntegration` | `false` | Never allow renderer Node access |
-| `contextIsolation` | `true` | Isolate preload from renderer |
-| `sandbox` | `true` | OS-level process sandbox |
-| `webSecurity` | `true` | No mixed content |
-| CSP | strict | No external script sources |
-| Shell URLs | allowlisted | Only `https:`, `http:`, `mailto:` |
-| File writes | user dirs only | No writes outside home/documents |
-| Single instance | enforced | `requestSingleInstanceLock()` |
+| Symptom | Fix |
+|---|---|
+| "Limited mode: no pseudo-terminal" | `node-pty` failed to load. The reason appears in the banner and in `~/.config/AI Terminal/logs/main.log`. From source, run `npm run rebuild:native`. |
+| AppImage does not start | Install `libfuse2`, or run it with `--appimage-extract` (see above). |
+| The copilot says "No local model is running" | Start Ollama (`ollama serve`) and pull the model (`ollama pull llama3.2:3b`), or set `AI_TERMINAL_AI_MODEL`. |
+| Anything else | Start with `AI_TERMINAL_LOG_LEVEL=debug` and check `main.log`. |

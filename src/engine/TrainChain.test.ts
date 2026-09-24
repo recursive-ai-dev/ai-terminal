@@ -36,12 +36,12 @@ import { makeFakeClock } from "./determinism";
 import type { TerminalState } from "./CommandProcessor";
 import type { TrainRequest } from "./types";
 import { clearLogs, peekLogs } from "./logger";
+import { RegisterFile } from "./x86Registers";
+import { createPerfState } from "./PerformanceEngine";
 
 // ── Test Harness ──────────────────────────────────────────
 
 function makeState(): TerminalState {
-  const { RegisterFile } = require("./x86Registers");
-  const { createPerfState } = require("./PerformanceEngine");
   return {
     tensors: new Map(),
     networks: new Map(),
@@ -313,9 +313,11 @@ export function runTrainChainTests(): string[] {
     const net = state.networks.get("net")!;
     const lossLenBefore = net.lossHistory.length;
 
-    // Force gradient explosion by injecting Infinity into weights
+    // Force a numeric blow-up by injecting Infinity into weights.
+    // (A large finite value such as 1e20 is not enough: tanh saturates,
+    // the loss stays finite and training legitimately succeeds.)
     const w = net.params()[0].data as Float32Array;
-    for (let i = 0; i < w.length; i++) w[i] = 1e20;
+    for (let i = 0; i < w.length; i++) w[i] = Infinity;
 
     const result = executeTrainChain(makeReq({ epochs: 3, maxGradNorm: 1.0 }), state, "corr-t15");
 

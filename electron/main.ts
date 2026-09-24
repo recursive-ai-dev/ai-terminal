@@ -1,187 +1,268 @@
 // ============================================================
-// ELECTRON MAIN PROCESS — x86_64 Neural Terminal
-// BrowserWindow, native menus, tray, IPC, security hardening
-// AppImage / NSIS / DMG via electron-builder
+// ELECTRON MAIN PROCESS — AI Terminal
+// Window lifecycle, native menu, tray, IPC registration and the
+// security boundary around the renderer.
+//
+// Development: set AI_TERMINAL_DEV_SERVER_URL (see `npm run electron:dev`)
+// to load the Vite dev server instead of the built renderer.
 // ============================================================
 import {
   app,
   BrowserWindow,
+  dialog,
   Menu,
-  Tray,
+  MenuItemConstructorOptions,
   nativeImage,
-  ipcMain,
-  IpcMainInvokeEvent,
   session,
+  Tray,
+  WebContents,
 } from "electron";
-import * as path from "path";
+import * as path from "node:path";
 import { registerSettingsHandlers } from "./ipc/settings";
-import { registerShellHandlers }    from "./ipc/shell";
-import { registerUpdaterHandlers }  from "./ipc/updater";
-import { registerTerminalHandlers } from "./ipc/terminal";
-import { registerAIHandlers }       from "./ipc/ai";
-import { IPC } from "./ipc/channels";
+import { openExternalSafely, registerShellHandlers } from "./ipc/shell";
+import { checkForUpdatesFromMenu, registerUpdaterHandlers } from "./ipc/updater";
+import { registerTerminalHandlers, terminateAllShells } from "./ipc/terminal";
+import { registerAIHandlers } from "./ipc/ai";
+import { IPC, type MenuAction } from "./ipc/channels";
+import { handle, isTrustedUrl, setTrustedAppLocation } from "./lib/ipcGuard";
+import { createLogger, initLogger } from "./lib/logger";
+import { WindowStateKeeper } from "./lib/windowState";
 
-// ── Environment detection ──
-const isDev = !app.isPackaged;
+// ── Paths & environment ──
+const isPackaged = app.isPackaged;
+const devServerUrl = !isPackaged ? process.env.AI_TERMINAL_DEV_SERVER_URL?.trim() || null : null;
+const indexHtml = path.join(__dirname, "../dist/index.html");
+const assetsDir = path.join(__dirname, "../assets");
+const isMac = process.platform === "darwin";
 
-// ── CommonJS main-process directory ──
-// tsconfig.electron.json intentionally emits CommonJS so Electron can load
-// the main process in both packaged and development builds.
-const __dirname_main = __dirname;
+app.setAppLogsPath();
+const logFile = initLogger(app.getPath("logs"), process.env.AI_TERMINAL_LOG_LEVEL === "debug" ? "debug" : "info");
+const log = createLogger("main");
+
+process.on("uncaughtException", error => log.error("uncaught exception", error));
+process.on("unhandledRejection", reason => log.error("unhandled rejection", reason));
 
 // ── App constants ──
-const APP_TITLE   = "AI Terminal";
-const WIN_WIDTH   = 1280;
-const WIN_HEIGHT  = 820;
-const MIN_WIDTH   = 800;
-const MIN_HEIGHT  = 560;
+const APP_TITLE  = "AI Terminal";
+const WIN_WIDTH  = 1280;
+const WIN_HEIGHT = 820;
+const MIN_WIDTH  = 800;
+const MIN_HEIGHT = 560;
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
+let windowState: WindowStateKeeper | null = null;
+
+// ────────────────────────────────────────────────────────────
+// CONTENT SECURITY POLICY
+// The production renderer also carries this policy as a <meta> tag
+// (injected by vite.config.ts), because response-header hooks do not
+// apply to file:// loads. The dev server needs inline scripts and a
+// websocket for hot reload.
+// ────────────────────────────────────────────────────────────
+function contentSecurityPolicy(): string {
+  const directives = [
+    "default-src 'none'",
+    devServerUrl ? "script-src 'self' 'unsafe-inline'" : "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self' data:",
+    // The neural lab's wget command fetches user-supplied URLs.
+    devServerUrl ? "connect-src 'self' https: http: ws://localhost:* ws://127.0.0.1:*" : "connect-src 'self' https: http:",
+    "worker-src 'self' blob:",
+    "base-uri 'none'",
+    "form-action 'none'",
+    "frame-src 'none'",
+    "object-src 'none'",
+  ];
+  return directives.join("; ");
+}
+
+function hardenSession(): void {
+  const ses = session.defaultSession;
+  const csp = contentSecurityPolicy();
+  ses.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        "Content-Security-Policy": [csp],
+      },
+    });
+  });
+  // The app needs no camera, microphone, geolocation, notifications, etc.
+  ses.setPermissionRequestHandler((_contents, permission, callback) => {
+    log.warn(`denied permission request: ${permission}`);
+    callback(false);
+  });
+  ses.setPermissionCheckHandler(() => false);
+}
+
+// Chromium downloads a Hunspell dictionary from Google's CDN at start-up
+// even with webPreferences.spellcheck off (electron/electron#22995, closed
+// as not planned). A terminal should not phone home, so disable the
+// checker and point any dictionary fetch at the discard port on loopback.
+// This must happen at session creation; by "ready" the fetch has begun.
+app.on("session-created", ses => {
+  ses.setSpellCheckerEnabled(false);
+  ses.setSpellCheckerDictionaryDownloadURL("http://127.0.0.1:9/");
+});
+
+// Applies to every WebContents the app ever creates.
+function hardenWebContents(contents: WebContents): void {
+  contents.on("will-navigate", (event, url) => {
+    if (!isTrustedUrl(url)) {
+      event.preventDefault();
+      log.warn("blocked navigation", url);
+    }
+  });
+  contents.on("will-redirect", (event, url) => {
+    if (!isTrustedUrl(url)) event.preventDefault();
+  });
+  contents.on("will-attach-webview", event => event.preventDefault());
+  // Links open in the user's browser, never inside the app.
+  contents.setWindowOpenHandler(({ url }) => {
+    openExternalSafely(url);
+    return { action: "deny" };
+  });
+}
 
 // ────────────────────────────────────────────────────────────
 // BROWSER WINDOW FACTORY
 // ────────────────────────────────────────────────────────────
 function createWindow(): BrowserWindow {
+  windowState ??= new WindowStateKeeper(app.getPath("userData"));
+  const state = windowState.load(MIN_WIDTH, MIN_HEIGHT);
+
   const win = new BrowserWindow({
-    width:           WIN_WIDTH,
-    height:          WIN_HEIGHT,
+    width:           state.bounds?.width ?? WIN_WIDTH,
+    height:          state.bounds?.height ?? WIN_HEIGHT,
+    x:               state.bounds?.x,
+    y:               state.bounds?.y,
     minWidth:        MIN_WIDTH,
     minHeight:       MIN_HEIGHT,
     title:           APP_TITLE,
-    backgroundColor: "#030712",   // matches Tailwind gray-950
-    show:            false,       // wait for ready-to-show
+    backgroundColor: "#080b12",
+    show:            false,       // wait for ready-to-show (no white flash)
     frame:           false,       // custom title bar in renderer
-    titleBarStyle:   "hidden",
+    titleBarStyle:   isMac ? "hiddenInset" : "hidden",
+    icon:            path.join(assetsDir, "icon.png"),
 
     webPreferences: {
-      // ── Security: Principle of Least Privilege ──
-      preload:              path.join(__dirname_main, "preload.js"),
-      nodeIntegration:      false,   // NEVER true
-      contextIsolation:     true,    // ALWAYS true
-      sandbox:              true,    // process-level sandbox
-      webSecurity:          true,
+      preload:                     path.join(__dirname, "preload.js"),
+      nodeIntegration:             false,
+      contextIsolation:            true,
+      sandbox:                     true,
+      webSecurity:                 true,
       allowRunningInsecureContent: false,
-      experimentalFeatures: false,
-
-      // ── Dev tools ──
-      devTools: isDev,
+      experimentalFeatures:        false,
+      spellcheck:                  false,
+      devTools:                    !isPackaged,
     },
-
-    // ── Icon ──
-    icon: path.join(__dirname_main, "../assets/icon.png"),
   });
+  windowState.track(win);
 
-  // ── Load app ──
-  if (isDev) {
-    // Vite dev server — adjust port if needed
-    win.loadURL("http://localhost:5173").catch(console.error);
-  } else {
-    win.loadFile(
-      path.join(__dirname_main, "../dist/index.html")
-    ).catch(console.error);
-  }
-
-  // ── Show only when fully rendered (no white flash) ──
   win.once("ready-to-show", () => {
+    if (state.maximized) win.maximize();
+    if (state.fullScreen) win.setFullScreen(true);
     win.show();
-    if (isDev) win.webContents.openDevTools({ mode: "detach" });
+    if (devServerUrl) win.webContents.openDevTools({ mode: "detach" });
   });
 
-  // ── Prevent navigation away from app ──
-  win.webContents.on("will-navigate", (event, navUrl) => {
-    const allowed = isDev
-      ? navUrl.startsWith("http://localhost")
-      : navUrl.startsWith("file://");
-    if (!allowed) event.preventDefault();
+  const pushMaximized = () => {
+    if (!win.isDestroyed()) win.webContents.send(IPC.WINDOW_MAX_PUSH, win.isMaximized());
+  };
+  win.on("maximize", pushMaximized);
+  win.on("unmaximize", pushMaximized);
+
+  win.webContents.on("render-process-gone", (_event, details) => {
+    log.error("renderer process gone", details);
+    if (details.reason !== "clean-exit" && !win.isDestroyed()) {
+      // The terminal module replaces the old shell when the page restarts.
+      setTimeout(() => { if (!win.isDestroyed()) win.webContents.reload(); }, 500);
+    }
+  });
+  // Renderer warnings and errors land in main.log for bug reports.
+  win.webContents.on("console-message", details => {
+    if (details.level === "warning" || details.level === "error") {
+      log.warn(`renderer ${details.level}: ${details.message}`, `${details.sourceId}:${details.lineNumber}`);
+    } else if (!isPackaged) {
+      log.debug(`renderer: ${details.message}`);
+    }
+  });
+  win.on("unresponsive", () => log.warn("window became unresponsive"));
+  win.on("responsive", () => log.info("window responsive again"));
+  win.webContents.on("did-fail-load", (_event, code, description, url) => {
+    log.error("renderer failed to load", { code, description, url });
   });
 
-  // ── Block new windows / popups ──
-  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.on("closed", () => {
+    if (mainWindow === win) mainWindow = null;
+  });
 
-  // ── Remember window state ──
-  win.on("close", () => {
-    mainWindow = null;
+  const load = devServerUrl ? win.loadURL(devServerUrl) : win.loadFile(indexHtml);
+  load.catch(error => {
+    log.error("could not load renderer", error);
+    dialog.showErrorBox(APP_TITLE, `The interface could not be loaded.\n\n${error instanceof Error ? error.message : String(error)}`);
   });
 
   return win;
 }
 
-// ────────────────────────────────────────────────────────────
-// CONTENT SECURITY POLICY
-// ────────────────────────────────────────────────────────────
-function applyCSP(): void {
-  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-    callback({
-      responseHeaders: {
-        ...details.responseHeaders,
-        "Content-Security-Policy": [
-          [
-            "default-src 'self'",
-            "script-src 'self' 'unsafe-inline'",   // needed for Vite HMR in dev
-            "style-src 'self' 'unsafe-inline'",    // Tailwind inline styles
-            "img-src 'self' data: blob:",
-            "font-src 'self' data:",
-            "connect-src 'self' ws://localhost:* http://localhost:*", // Vite WS
-            "worker-src 'self'",
-            "frame-src 'none'",
-            "object-src 'none'",
-          ].join("; "),
-        ],
-      },
-    });
-  });
+function showMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    mainWindow = createWindow();
+    return;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
 }
 
 // ────────────────────────────────────────────────────────────
 // NATIVE MENU
+// Accelerators avoid plain Ctrl+<letter>: in a terminal those keys
+// belong to the shell (Ctrl+C interrupt, Ctrl+Z suspend, Ctrl+R history
+// search, Ctrl+S/O in editors). Like other Linux terminals, app
+// shortcuts use Ctrl+Shift on Linux/Windows and Cmd on macOS.
 // ────────────────────────────────────────────────────────────
-function buildMenu(win: BrowserWindow): void {
-  const template: Electron.MenuItemConstructorOptions[] = [
+function sendMenuAction(action: MenuAction): void {
+  const target = BrowserWindow.getFocusedWindow() ?? mainWindow;
+  if (target && !target.isDestroyed()) target.webContents.send(IPC.MENU_ACTION, action);
+}
+
+function buildMenu(): void {
+  const mod = isMac ? "Cmd" : "Ctrl+Shift";
+
+  const template: MenuItemConstructorOptions[] = [
+    ...(isMac ? [{ role: "appMenu" as const }] : []),
     {
       label: "File",
       submenu: [
-        {
-          label: "Save Terminal Log...",
-          accelerator: "CmdOrCtrl+S",
-          click: () => win.webContents.send("menu:saveLog"),
-        },
-        {
-          label: "Open Log File...",
-          accelerator: "CmdOrCtrl+O",
-          click: () => win.webContents.send("menu:openLog"),
-        },
+        { label: "Save Terminal Log…", accelerator: `${mod}+S`, click: () => sendMenuAction("saveLog") },
+        { label: "Open Log File…", accelerator: `${mod}+O`, click: () => sendMenuAction("openLog") },
         { type: "separator" },
-        {
-          label: "Quit",
-          accelerator: process.platform === "darwin" ? "Cmd+Q" : "Alt+F4",
-          click: () => app.quit(),
-        },
+        isMac ? { role: "close" } : { label: "Quit", accelerator: "Ctrl+Shift+Q", click: () => app.quit() },
       ],
     },
     {
       label: "Edit",
       submenu: [
-        { role: "undo" },
-        { role: "redo" },
+        { role: "undo", registerAccelerator: isMac },
+        { role: "redo", registerAccelerator: isMac },
         { type: "separator" },
-        { role: "cut" },
-        { role: "copy" },
-        { role: "paste" },
-        { role: "selectAll" },
+        { role: "cut", registerAccelerator: isMac },
+        { role: "copy", accelerator: `${mod}+C` },
+        { role: "paste", accelerator: `${mod}+V` },
+        { role: "selectAll", accelerator: `${mod}+A` },
       ],
     },
     {
       label: "View",
       submenu: [
-        {
-          label: "Settings",
-          accelerator: "CmdOrCtrl+,",
-          click: () => win.webContents.send("menu:openSettings"),
-        },
+        { label: "Settings", accelerator: "CmdOrCtrl+,", click: () => sendMenuAction("openSettings") },
         { type: "separator" },
-        ...(isDev ? [
-          { role: "reload" as const },
+        ...(!isPackaged ? [
+          { role: "reload" as const, registerAccelerator: false },
           { role: "forceReload" as const },
           { role: "toggleDevTools" as const },
           { type: "separator" as const },
@@ -197,169 +278,138 @@ function buildMenu(win: BrowserWindow): void {
       label: "Help",
       submenu: [
         {
-          label: "About x86 Neural Terminal",
+          label: `About ${APP_TITLE}`,
           click: () => {
-            win.webContents.send("menu:about");
+            const options: Electron.MessageBoxOptions = {
+              type: "info",
+              title: `About ${APP_TITLE}`,
+              message: `${APP_TITLE} ${app.getVersion()}`,
+              detail: [
+                `Electron ${process.versions.electron} · Chromium ${process.versions.chrome} · Node ${process.versions.node}`,
+                logFile ? `Log file: ${logFile}` : "",
+              ].filter(Boolean).join("\n"),
+            };
+            const parent = BrowserWindow.getFocusedWindow();
+            void (parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options));
           },
         },
         {
-          label: "Check for Updates",
-          click: () => {
-            win.webContents.send("menu:checkUpdates");
+          label: "Check for Updates…",
+          click: async () => {
+            const result = await checkForUpdatesFromMenu();
+            if (!result.ok && result.error) {
+              const parent = BrowserWindow.getFocusedWindow();
+              const options: Electron.MessageBoxOptions = { type: "info", title: "Updates", message: result.error };
+              void (parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options));
+            }
           },
         },
       ],
     },
   ];
 
-  // macOS: add app menu
-  if (process.platform === "darwin") {
-    template.unshift({
-      label: app.getName(),
-      submenu: [
-        { role: "about" },
-        { type: "separator" },
-        { role: "services" },
-        { type: "separator" },
-        { role: "hide" },
-        { role: "hideOthers" },
-        { role: "unhide" },
-        { type: "separator" },
-        { role: "quit" },
-      ],
-    });
-  }
-
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 // ────────────────────────────────────────────────────────────
-// SYSTEM TRAY
+// SYSTEM TRAY (optional — not every Linux desktop shows one)
 // ────────────────────────────────────────────────────────────
-function createTray(win: BrowserWindow): void {
+function createTray(): void {
+  const icon = nativeImage.createFromPath(path.join(assetsDir, "tray-icon.png"));
+  if (icon.isEmpty()) {
+    log.warn("tray icon missing — tray disabled");
+    return;
+  }
   try {
-    const iconPath = path.join(__dirname_main, "../assets/tray-icon.png");
-    const icon = nativeImage.createFromPath(iconPath);
-    tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon);
+    tray = new Tray(icon);
     tray.setToolTip(APP_TITLE);
-
-    const contextMenu = Menu.buildFromTemplate([
-      {
-        label: "Open Terminal",
-        click: () => {
-          win.show();
-          win.focus();
-        },
-      },
+    tray.setContextMenu(Menu.buildFromTemplate([
+      { label: "Open Terminal", click: showMainWindow },
       { type: "separator" },
-      {
-        label: "Quit",
-        click: () => app.quit(),
-      },
-    ]);
-
-    tray.setContextMenu(contextMenu);
+      { label: "Quit", click: () => app.quit() },
+    ]));
     tray.on("click", () => {
-      if (win.isVisible()) {
-        win.hide();
-      } else {
-        win.show();
-        win.focus();
-      }
+      if (mainWindow?.isVisible() && mainWindow.isFocused()) mainWindow.hide();
+      else showMainWindow();
     });
-  } catch {
-    // Tray icon asset not found — skip tray (non-fatal)
-    console.warn("[main] Tray icon not found — tray disabled.");
+  } catch (error) {
+    tray = null;
+    log.warn("tray unavailable", error);
   }
 }
 
 // ────────────────────────────────────────────────────────────
-// WINDOW CONTROL IPC HANDLERS
-// (Frameless window — renderer owns the titlebar buttons)
+// WINDOW CONTROL IPC (frameless window — renderer owns the buttons)
+// Each call acts on the window that sent it.
 // ────────────────────────────────────────────────────────────
 function registerWindowHandlers(): void {
-  ipcMain.handle(IPC.WINDOW_MINIMIZE, (_event: IpcMainInvokeEvent) => {
-    mainWindow?.minimize();
+  handle(IPC.WINDOW_MINIMIZE, event => {
+    BrowserWindow.fromWebContents(event.sender)?.minimize();
   });
-
-  ipcMain.handle(IPC.WINDOW_MAXIMIZE, (_event: IpcMainInvokeEvent) => {
-    if (!mainWindow) return;
-    if (mainWindow.isMaximized()) {
-      mainWindow.unmaximize();
-    } else {
-      mainWindow.maximize();
-    }
+  handle(IPC.WINDOW_MAXIMIZE, event => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win) return;
+    if (win.isMaximized()) win.unmaximize();
+    else win.maximize();
   });
-
-  ipcMain.handle(IPC.WINDOW_CLOSE, (_event: IpcMainInvokeEvent) => {
-    mainWindow?.close();
+  handle(IPC.WINDOW_CLOSE, event => {
+    BrowserWindow.fromWebContents(event.sender)?.close();
   });
-
-  ipcMain.handle(IPC.WINDOW_IS_MAX, (_event: IpcMainInvokeEvent) => {
-    return mainWindow?.isMaximized() ?? false;
-  });
+  handle(IPC.WINDOW_IS_MAX, event => BrowserWindow.fromWebContents(event.sender)?.isMaximized() ?? false);
 }
 
 // ────────────────────────────────────────────────────────────
 // APP LIFECYCLE
 // ────────────────────────────────────────────────────────────
 async function bootstrap(): Promise<void> {
-  // ── Security hardening ──
-  app.commandLine.appendSwitch("disable-features", "OutOfBlinkCors");
-
   await app.whenReady();
+  log.info(`starting ${APP_TITLE} ${app.getVersion()}`, {
+    electron: process.versions.electron,
+    platform: process.platform,
+    arch: process.arch,
+    packaged: isPackaged,
+    devServer: devServerUrl,
+  });
 
-  applyCSP();
+  setTrustedAppLocation(devServerUrl ? { devServerUrl } : { indexHtml });
+  hardenSession();
+
   registerWindowHandlers();
   registerShellHandlers();
   registerTerminalHandlers();
   registerAIHandlers();
-  await registerSettingsHandlers();
+  registerSettingsHandlers();
+  await registerUpdaterHandlers();
 
+  buildMenu();
   mainWindow = createWindow();
-  buildMenu(mainWindow);
-  createTray(mainWindow);
+  createTray();
 
-  // Wire updater after window exists (needs BrowserWindow ref for push events)
-  await registerUpdaterHandlers(mainWindow, isDev);
-
-  // macOS: re-create window on dock click if closed
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      mainWindow = createWindow();
-    } else {
-      mainWindow?.show();
-    }
-  });
+  // macOS: re-create the window on dock click if it was closed.
+  app.on("activate", showMainWindow);
 }
 
-// ── Quit behavior ──
+app.on("web-contents-created", (_event, contents) => hardenWebContents(contents));
+
 app.on("window-all-closed", () => {
-  // On macOS: keep process alive until explicit Quit
-  if (process.platform !== "darwin") {
-    app.quit();
-  }
+  // macOS keeps the process alive until an explicit Quit.
+  if (!isMac) app.quit();
 });
 
 app.on("before-quit", () => {
+  terminateAllShells();
   tray?.destroy();
+  tray = null;
 });
 
 // ── Single instance lock ──
-const gotLock = app.requestSingleInstanceLock();
-if (!gotLock) {
+if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on("second-instance", () => {
-    // Focus existing window on second launch
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
-    }
-  });
-
-  bootstrap().catch(err => {
-    console.error("[main] Fatal bootstrap error:", err);
-    app.quit();
+  app.on("second-instance", showMainWindow);
+  bootstrap().catch(error => {
+    log.error("fatal bootstrap error", error);
+    dialog.showErrorBox(APP_TITLE, `AI Terminal failed to start.\n\n${error instanceof Error ? error.message : String(error)}`);
+    app.exit(1);
   });
 }
